@@ -96,11 +96,48 @@ async function readAdminIds() {
   }
 }
 
+// Admin ids used to be loaded once by a startup routine. Serverless has no
+// reliable startup, so they are loaded on first use and cached for the life of
+// the warm instance. The TTL bounds how long a newly added admin waits, without
+// re-reading the sheet on every single update.
+let adminIdsLoadedAt = 0;
+const ADMIN_CACHE_TTL_MS = 60 * 1000;
+
+/**
+ * Ensure the admin list is populated before any isAdmin() check.
+ *
+ * isAdmin() itself stays synchronous because it is called from inside
+ * non-async code paths; this is awaited once per update instead.
+ */
+async function ensureAdminIdsLoaded({ force = false } = {}) {
+  const isStale = Date.now() - adminIdsLoadedAt > ADMIN_CACHE_TTL_MS;
+
+  if (!force && adminIds.length > 0 && !isStale) {
+    return adminIds;
+  }
+
+  try {
+    const loaded = await readAdminIds();
+
+    // An empty read is treated as a transient failure rather than "everyone
+    // lost admin": a Sheets blip must not lock every admin out of the bot.
+    if (loaded.length > 0 || adminIds.length === 0) {
+      adminIds = loaded;
+    }
+
+    adminIdsLoadedAt = Date.now();
+  } catch (error) {
+    console.error('Error loading admin IDs:', error.message);
+  }
+
+  return adminIds;
+}
+
 /**
  * Check if a user is an admin
  */
 function isAdmin(userId) {
-  return adminIds.includes(userId);
+  return adminIds.includes(Number(userId));
 }
 
 /**
@@ -634,6 +671,7 @@ async function getAdminUsernameById(bot, adminId) {
 module.exports = {
   initializeGoogleSheets,
   readAdminIds,
+  ensureAdminIdsLoaded,
   isAdmin,
   getAdminIds,
   reloadAdminIds,
