@@ -1,9 +1,12 @@
 const path = require('path');
 
-// Resolve .env relative to the repo root rather than process.cwd(), so the bot
-// behaves the same whether it is started from the root or from src/. On Vercel
-// there is no .env file at all and the dashboard injects the variables instead.
-require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+// Resolve local environment files relative to the repo root rather than
+// process.cwd(), so the bot behaves the same whether started from root or src/.
+// Non-sensitive settings live in .env.config and credentials in .env.secret.
+// On Vercel neither file exists; the dashboard injects both sets of variables.
+const root = path.resolve(__dirname, '..');
+require('dotenv').config({ path: path.join(root, '.env.config') });
+require('dotenv').config({ path: path.join(root, '.env.secret') });
 
 function readString(name, fallback = '') {
   const value = process.env[name];
@@ -36,9 +39,9 @@ function readList(name) {
     .filter(Boolean);
 }
 
-// Private keys are stored single-line with literal \n escapes because .env
-// cannot hold real newlines. Pasting a genuine multi-line key into the Vercel
-// dashboard also works, hence handling both.
+// Private keys are stored single-line with literal \n escapes because dotenv
+// files cannot hold real newlines. Pasting a genuine multi-line key into the
+// Vercel dashboard also works, hence handling both.
 function readPrivateKey(name) {
   return readString(name).replace(/\\n/g, '\n');
 }

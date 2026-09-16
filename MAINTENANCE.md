@@ -93,7 +93,8 @@ automatically.
 
 ```bash
 npm install
-cp .env.example .env
+# Create .env.config for settings and .env.secret for credentials.
+# Use .env.example as the complete variable checklist.
 npm test                 # 91 tests, no network needed
 npm run dev              # local long polling
 npm run webhook:info     # what is registered right now
@@ -131,7 +132,7 @@ npm run webhook:info    # url empty = polling mode; url set = webhook mode
 
 > **Use a separate test bot.** Create a second bot with @BotFather; put the
 > production token only in Vercel Production, and the test token in your local
-> `.env` and in Vercel Preview. Right now there is only one bot, which means
+> `.env.secret` and in Vercel Preview. Right now there is only one bot, which means
 > local development takes production offline. Fixing this is the single
 > cheapest reliability improvement available.
 
@@ -307,7 +308,7 @@ Other things to watch:
 |---|---|---|
 | Sheet no longer shared | `The caller does not have permission` | Re-share the spreadsheet with `GOOGLE_SHEETS_CLIENT_EMAIL` as Editor |
 | Key rotated / expired | `invalid_grant` | Generate a new key, update `GOOGLE_SHEETS_PRIVATE_KEY`, redeploy |
-| Newline escaping wrong | `error:1E08010C:DECODER routines::unsupported` | The key must contain real newlines. In `.env` use one line with `\n` escapes inside double quotes; `src/config.js` converts them. In the Vercel dashboard paste the real multi-line key. |
+| Newline escaping wrong | `error:1E08010C:DECODER routines::unsupported` | The key must contain real newlines. In `.env.secret` use one line with `\n` escapes inside double quotes; `src/config.js` converts them. In the Vercel dashboard paste the real multi-line key. |
 | Quota exceeded | `429` in `sheet_sync_failed` logs | The outbox backs off automatically. Sustained 429s mean too many writes — raise the drain batch interval. |
 
 ```sql
@@ -717,7 +718,7 @@ Rules that must not be relaxed:
 - **The receipts bucket stays private.** Access is only ever through short-lived
   signed URLs.
 - **RLS stays on** for every table.
-- **Never commit `.env`.** `.gitignore` covers `.env` at any depth.
+- **Never commit `.env.config` or `.env.secret`.** `.gitignore` covers both.
 
 **Access:** Supabase and the Vercel dashboard should be limited to whoever
 maintains the bot. The Google Sheet can be shared more widely since it holds no

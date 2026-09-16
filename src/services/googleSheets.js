@@ -1,5 +1,6 @@
 const { google } = require('googleapis');
-require('dotenv').config();
+// Load both local environment files before reading process.env directly.
+require('../config');
 
 // Initialize Google Sheets auth
 const auth = new google.auth.GoogleAuth({

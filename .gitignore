@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+.env.config
+.env.secret
 .env.local
 .env.production
 

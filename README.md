@@ -123,12 +123,15 @@ Requires **Node 22 or newer**.
 
 ```bash
 npm install
-cp .env.example .env    # then fill it in
+# Create .env.config for settings and .env.secret for credentials.
+# Use .env.example as the complete variable checklist.
 npm test
 npm run dev
 ```
 
-`.env.example` documents every variable and where to get it.
+`.env.example` lists every variable. Put credentials and tokens in
+`.env.secret`; put all other values in `.env.config`. Both local files are
+gitignored.
 
 ### A token cannot poll and use a webhook at the same time
 
@@ -144,7 +147,7 @@ npm run webhook:delete   # switch back to local polling
 there silently.
 
 **Use a separate bot token for development.** Create a second bot with
-@BotFather and put it in your local `.env`. Otherwise deleting the webhook to
+@BotFather and put it in your local `.env.secret`. Otherwise deleting the webhook to
 work locally takes production offline.
 
 ---
@@ -177,6 +180,9 @@ Preview. Use the **test** bot token for Preview.
 > On the Hobby plan, function regions may be fixed to the project's default. If
 > `sin1` is rejected, drop the `regions` key — everything still works, just with
 > slightly higher latency to Supabase.
+
+> Because `public/` exists, Vercel serves **only** that directory as static
+> files. Source, `package.json` and migrations are not web-reachable.
 
 ### 3. Point Telegram at it
 
@@ -256,6 +262,7 @@ before writing that job.
 ## Project layout
 
 ```
+public/index.html        the landing page served at /
 api/                     Vercel functions (webhook, cron, health)
 scripts/set-webhook.js   register / inspect / delete the webhook
 src/
