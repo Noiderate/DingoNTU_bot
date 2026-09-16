@@ -7,7 +7,16 @@ const { getSupabase, unwrap } = require('./supabase');
  * items and have the second land on a different instance that had never heard
  * of the first.
  *
- * items maps a FoodAndStock sheet row number to a quantity: { "2": 3, "5": 1 }.
+ * items maps a FoodAndStock sheet row number to the quantity ordered AND the
+ * item's name as it read when it was added:
+ *
+ *   { "2": { "quantity": 3, "name": "Chicken Rice" } }
+ *
+ * The name is stored because a row number is not a stable identifier. An item's
+ * id IS its spreadsheet row, so if staff delete or sort rows mid-session,
+ * row 2 silently becomes a different food and the customer would be charged for
+ * something they never chose. Checking the name at checkout turns that into a
+ * clear error instead of a wrong charge. See MAINTENANCE.md "Row-number-as-ID".
  */
 
 // Long enough to cover a preorder run, short enough that abandoned carts do not
@@ -77,14 +86,28 @@ async function setHall(telegramUserId, hall) {
   });
 }
 
-/** Add one of an item. Returns the updated cart. */
-async function addItem(telegramUserId, foodRowId, quantity = 1) {
+/**
+ * Add one of an item, recording the name it had at the time.
+ */
+async function addItem(telegramUserId, foodRowId, name, quantity = 1) {
   const cart = await getCart(telegramUserId);
   const key = String(foodRowId);
+  const existing = cart.items[key];
 
-  cart.items[key] = (cart.items[key] || 0) + quantity;
+  cart.items[key] = {
+    quantity: (existing ? existing.quantity : 0) + quantity,
+    // Always the latest reading, so the snapshot matches what the customer was
+    // actually shown on the screen they tapped.
+    name,
+  };
 
   return saveCart(telegramUserId, cart);
+}
+
+/** Quantity of one item currently in the cart. */
+function getQuantity(cart, foodRowId) {
+  const entry = cart.items && cart.items[String(foodRowId)];
+  return entry ? Number(entry.quantity) || 0 : 0;
 }
 
 async function clearItems(telegramUserId) {
@@ -102,15 +125,47 @@ async function clearCart(telegramUserId) {
   );
 }
 
-/** Entries with a positive quantity, as [foodRowId, quantity] number pairs. */
+/** Entries with a positive quantity, as { foodId, quantity, name }. */
 function cartEntries(cart) {
   return Object.entries(cart.items || {})
-    .map(([key, quantity]) => [Number(key), Number(quantity)])
-    .filter(([, quantity]) => quantity > 0);
+    .map(([key, entry]) => ({
+      foodId: Number(key),
+      quantity: entry ? Number(entry.quantity) || 0 : 0,
+      name: entry ? entry.name || null : null,
+    }))
+    .filter(entry => entry.quantity > 0);
 }
 
 function isEmpty(cart) {
   return cartEntries(cart).length === 0;
+}
+
+/**
+ * Check that every cart entry still points at the food the customer chose.
+ *
+ * Returns the first mismatch, or null when the cart is still valid.
+ *
+ * This is the guard against spreadsheet rows shifting underneath an open cart.
+ * Without it, deleting a row while someone is ordering would charge them for
+ * whatever food moved into that row - the one failure mode here that actually
+ * costs a customer money.
+ *
+ * Pure, so it can be tested without a database.
+ */
+function findCartMismatch(entries, liveItems) {
+  for (const entry of entries) {
+    const live = liveItems.find(item => item.id === entry.foodId);
+
+    if (!live) {
+      return { foodId: entry.foodId, expected: entry.name, actual: null };
+    }
+
+    if (entry.name && live.name !== entry.name) {
+      return { foodId: entry.foodId, expected: entry.name, actual: live.name };
+    }
+  }
+
+  return null;
 }
 
 module.exports = {
@@ -120,8 +175,10 @@ module.exports = {
   saveCart,
   setHall,
   addItem,
+  getQuantity,
   clearItems,
   clearCart,
   cartEntries,
   isEmpty,
+  findCartMismatch,
 };

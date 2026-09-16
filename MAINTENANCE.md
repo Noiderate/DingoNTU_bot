@@ -251,11 +251,24 @@ Deleting, inserting or sorting rows renumbers everything below, so:
 - delete buttons in an open admin menu target the wrong row
 - `food_sheet_row_id` / `hall_sheet_row_id` in Supabase stop matching the sheet
 
-Partial mitigations already in place: delete buttons carry a hash of the item
-name (`createCallbackItemToken` in `src/handlers/admin.js`) and refuse to fire
-if the name at that row no longer matches; orders snapshot the item name and
-price, so past orders always read correctly; restocking matches on row id and
-falls back to name (`restockOrder` in `src/services/orderActions.js`).
+Partial mitigations already in place:
+
+- **Carts record the item name when it is added**, and `findCartMismatch` in
+  `src/services/cartStore.js` re-checks it at checkout. If a row shifted, the
+  customer is told the menu changed and asked to start again, rather than being
+  charged for whatever food moved into that row. This closes the one failure
+  mode that actually costs a customer money.
+- **Delete buttons carry a hash of the item name**
+  (`createCallbackItemToken` in `src/handlers/admin.js`) and refuse to fire if
+  the name at that row no longer matches.
+- **Orders snapshot the item name and price**, so past orders always read
+  correctly however the sheet changes afterwards.
+- **Restocking matches on row id and falls back to name**
+  (`restockOrder` in `src/services/orderActions.js`).
+
+None of these fix the underlying design — they contain its consequences. A
+mismatch is logged as `cart_item_mismatch`; seeing those in the logs means
+someone is editing the sheet during a live run.
 
 **Rules for staff:**
 
@@ -734,9 +747,15 @@ An honest list.
    *Improvement:* move stock into Postgres and mirror it out, inverting the
    current direction.
 
-2. **Row numbers are item IDs.** §3.3. The most likely cause of a confusing
-   production bug.
-   *Improvement:* add a stable ID column to `FoodAndStock` and key on that.
+2. **Row numbers are item IDs.** §3.3. Still the most likely cause of a
+   confusing production bug. Carts now detect a shifted row at checkout and
+   refuse, so nobody is charged for the wrong food, but open admin menus and the
+   `food_sheet_row_id` snapshots stored on orders can still point at the wrong
+   row.
+   *Improvement:* add a stable ID column to `FoodAndStock` and `Hall` and key on
+   that instead. Worth doing once the system is proven working end to end — not
+   before, since it touches the menu, carts, admin buttons and the schema at
+   once.
 
 3. **Sheets stock has no transactional guarantee.** The lease lock serialises
    the bot's own writes, but a human editing the sheet bypasses it entirely.

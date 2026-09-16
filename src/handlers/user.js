@@ -78,7 +78,7 @@ function buildOrderText(hallName, foodItems, cart) {
   let lines = '';
 
   for (const item of foodItems) {
-    const quantity = cart.items[String(item.id)] || 0;
+    const quantity = cartStore.getQuantity(cart, item.id);
 
     if (quantity > 0) {
       const unitCents = toCents(item.price) || 0;
@@ -381,13 +381,15 @@ async function handleAddFood(bot, query, chatId, userId, data) {
 
   // Advisory only. The authoritative stock check happens inside the lock at
   // confirm time, because stock can change between tapping and confirming.
-  if ((cart.items[String(foodId)] || 0) >= (item.stock || 0)) {
+  if (cartStore.getQuantity(cart, foodId) >= (item.stock || 0)) {
     await answerCallbackSafely(bot, query.id);
     await bot.sendMessage(chatId, `❌ Sorry, there is no more stock for ${item.name}.`);
     return true;
   }
 
-  await cartStore.addItem(userId, foodId);
+  // The name is recorded alongside the quantity so checkout can detect the
+  // spreadsheet row having shifted under this cart.
+  await cartStore.addItem(userId, foodId, item.name);
   await showOrderScreen(bot, chatId, userId, query.message.message_id);
   await answerCallbackSafely(bot, query.id, `Added: ${item.name}`);
   return true;
@@ -454,11 +456,34 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
       }
 
       const liveItems = await getFoodItems();
+
+      // An item's id is its spreadsheet row number, so rows being deleted or
+      // sorted while this cart was open would silently repoint it at different
+      // food. Refuse rather than charge for something they never chose.
+      const mismatch = cartStore.findCartMismatch(entries, liveItems);
+
+      if (mismatch) {
+        log('warn', 'cart_item_mismatch', {
+          food_row_id: mismatch.foodId,
+          expected: mismatch.expected,
+          actual: mismatch.actual,
+        });
+
+        await cartStore.clearItems(userId);
+        await answerCallbackSafely(bot, query.id);
+        await bot.sendMessage(
+          chatId,
+          '⚠️ The menu changed while you were ordering, so your cart is no longer valid.\n\n'
+          + 'Nothing has been charged. Please start again with /start.'
+        );
+        return null;
+      }
+
       const stockUpdates = [];
       const orderItems = [];
       let totalCents = 0;
 
-      for (const [foodId, quantity] of entries) {
+      for (const { foodId, quantity } of entries) {
         const item = liveItems.find(food => food.id === foodId);
 
         if (!item || (item.stock || 0) < quantity) {

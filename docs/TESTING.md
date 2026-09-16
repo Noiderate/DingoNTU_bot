@@ -49,6 +49,11 @@ npm run webhook:info            # url set, pending 0, no last_error
 - [ ] **Hall selection.** `/start` → halls listed → pick one → menu appears.
 - [ ] **Cart.** Add several items; the total updates and matches the sheet prices.
 - [ ] **Clear Cart** empties it. Tapping it again says "Cart is already empty."
+- [ ] **A shifted spreadsheet row is caught.** Add an item to a cart, then
+      delete a row *above* it in `FoodAndStock` so everything below shifts up.
+      Tap Confirm Order. The customer must be told the menu changed and asked to
+      start again — they must **not** be charged for the food that moved into
+      that row. A `cart_item_mismatch` line appears in the logs.
 - [ ] **Confirm Order.** Customer sees an order code like `DG20260916-1`, the
       hall, the item list and the total.
 - [ ] **Stock deducted.** `FoodAndStock` column C dropped by the right amounts.
