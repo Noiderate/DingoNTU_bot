@@ -1,22 +1,35 @@
 {
   "name": "dingo-post-form-bot",
   "version": "1.0.0",
-  "description": "A Telegram bot that repeats user messages and can post to Google Sheets",
-  "main": "src/index.js",
+  "description": "Telegram ordering bot for Dingo Cafe: hall preorders, delivery mode, and AI-verified PayNow payments",
+  "main": "src/app.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "start": "node src/dev-polling.js",
+    "dev": "nodemon src/dev-polling.js",
+    "test": "node --test test/",
+    "webhook:set": "node scripts/set-webhook.js set",
+    "webhook:info": "node scripts/set-webhook.js info",
+    "webhook:delete": "node scripts/set-webhook.js delete"
   },
   "keywords": [
     "telegram",
     "bot",
-    "google-sheets"
+    "google-sheets",
+    "supabase",
+    "gemini"
   ],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "dependencies": {
+    "@google/genai": "^2.22.0",
+    "@supabase/supabase-js": "^2.116.0",
+    "@vercel/functions": "^3.9.8",
     "dotenv": "^16.4.5",
     "googleapis": "^171.4.0",
+    "luxon": "^3.7.2",
     "node-telegram-bot-api": "^0.66.0"
   },
   "devDependencies": {
