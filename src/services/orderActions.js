@@ -182,8 +182,9 @@ async function expireOrder(bot, order) {
   await notify(
     bot,
     expiredOrder.chatId,
-    `⌛ Order ${expiredOrder.code} has expired because payment was not received in time.\n\n`
-    + `The items have been returned to stock. Please restart your order by typing /start`
+    `⌛ Order ${expiredOrder.code} has expired because a payment receipt was not received in time.\n\n`
+    + `The items have been returned to stock. Please create your order again by typing /start.\n\n`
+    + `If you have already made payment, recreate the same order and submit the screenshot of that payment. You do not need to pay again.`
   );
 
   log('info', 'order_expired', { order_code: expiredOrder.code });

@@ -506,41 +506,68 @@ async function handleOrderConfirm(bot, query, chatId, userId, messageId, data) {
  * resulting file_id is cached, so later sends skip the upload entirely and no
  * longer depend on the file being bundled into the deployment.
  */
+function buildPaymentCaption(order) {
+  const heading = `✅ Order ${order.code} placed\n🏢 Hall: ${order.hallName}\n\n`;
+  const instructions = `\n\n💰 Amount due: ${formatCents(order.totalCents)}\n\n`
+    + 'Please use PayNow to pay using the QR above.\n\n'
+    + 'Send an UNCROPPED screenshot of the completed transfer for automatic verification. You can send it as a photo or file.\n\n'
+    + 'MUST INCLUDE DATE, TIME AND PAYMENT AMOUNT AND TO WHO\n\n'
+    + (config.payment.expiryEnabled ? `⚠️ Pay within ${config.payment.windowMinutes} minutes.` : 'Please send your receipt after payment.');
+  const summary = orderActions.buildOrderSummary(order);
+  const suffix = '\n… Full order: /orders';
+  // Telegram photo captions allow 1024 characters. Keep payment details intact.
+  const budget = Math.max(0, 1024 - heading.length - instructions.length);
+  let displayed = summary;
+  if (summary.length > budget) {
+    displayed = '';
+    for (const char of summary) {
+      if (displayed.length + char.length > budget - suffix.length) break;
+      displayed += char;
+    }
+    displayed += suffix;
+  }
+  return heading + displayed + instructions;
+}
+
 async function sendPaymentInstructions(bot, order) {
-  const caption = `✅ Your order ${order.code} has been confirmed.\n`
-    + `Please follow the instruction in the screenshot above to make payment, and attach a screenshot.\n\n`
-    + `💰 Amount due: ${formatCents(order.totalCents)}\n\n`
-    + `MUST INCLUDE DATE, TIME AND PAYMENT AMOUNT AND TO WHO\n\n`
-    + `Please send an UNCROPPED screenshot of the completed transfer. `
-    + `You can send it as a photo or as a file.\n\n`
-    + `⚠️You have ${config.payment.windowMinutes} minutes to make payment⚠️`;
+  const caption = buildPaymentCaption(order);
+  let cachedFileId = null;
+  try {
+    cachedFileId = await stateStore.get(stateStore.KEYS.paymentImageFileId(), null);
+  } catch (error) {
+    log('warn', 'payment_image_cache_read_failed', { error: error.message });
+  }
+  const sources = [...new Set([
+    cachedFileId,
+    config.telegram.paymentInstructionImage,
+    config.telegram.paymentInstructionImageUrl,
+  ].filter(Boolean))];
 
-  const cachedFileId = await stateStore.get(stateStore.KEYS.paymentImageFileId(), null);
-  const source = cachedFileId
-    || config.telegram.paymentInstructionImage
-    || config.telegram.paymentInstructionImageUrl
-    || '';
-
-  if (!source) {
-    await orderActions.notify(bot, order.chatId, caption);
+  for (const source of sources) {
+    let sent;
+    try {
+      sent = await bot.sendPhoto(order.chatId, resolveImageSource(source), { caption });
+    } catch (error) {
+      log('warn', 'payment_instruction_send_failed', { order_code: order.code, error: error.message });
+      continue;
+    }
+    // A cache failure after delivery must never send a duplicate message.
+    if (source !== cachedFileId && sent?.photo?.length) {
+      try {
+        await stateStore.set(
+          stateStore.KEYS.paymentImageFileId(),
+          sent.photo[sent.photo.length - 1].file_id,
+          { ttlMs: 30 * 24 * 60 * 60 * 1000 }
+        );
+      } catch (error) {
+        log('warn', 'payment_image_cache_write_failed', { error: error.message });
+      }
+    }
     return;
   }
-
-  try {
-    const sent = await bot.sendPhoto(order.chatId, resolveImageSource(source), { caption });
-
-    if (!cachedFileId && sent && sent.photo && sent.photo.length) {
-      await stateStore.set(
-        stateStore.KEYS.paymentImageFileId(),
-        sent.photo[sent.photo.length - 1].file_id,
-        { ttlMs: 30 * 24 * 60 * 60 * 1000 }
-      );
-    }
-  } catch (error) {
-    log('warn', 'payment_instruction_send_failed', { order_code: order.code, error: error.message });
-    // The customer must still learn what to pay, even without the image.
-    await orderActions.notify(bot, order.chatId, caption);
-  }
+  await orderActions.notify(bot, order.chatId,
+    caption.replace('Please use PayNow to pay using the QR above.',
+      'Payment image unavailable. Please contact an admin for payment details.'));
 }
 
 function resolveImageSource(source) {
@@ -1310,6 +1337,7 @@ module.exports = {
   handleAdminCallback,
   refreshPreorderPost,
   sendPaymentInstructions,
+  buildPaymentCaption,
   buildPreorderMessageText,
   resolveImageSource,
   getAdminState,

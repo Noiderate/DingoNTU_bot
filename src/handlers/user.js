@@ -574,13 +574,6 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
     log('warn', 'delete_cart_message_failed', { error: error.message });
   }
 
-  await bot.sendMessage(
-    chatId,
-    `✅ Your order has been placed. Please make payment and send your receipt for automatic verification.\n\n`
-    + `🧾 Order ${reservation.code}\n🏢 Hall: ${reservation.hallName}\n\n`
-    + `🧾 Order Summary:\n${orderActions.buildOrderSummary(reservation)}`
-  );
-
   // DO NOT DELETE: legacy order approval is intentionally disabled.
   // To restore it, remove requiresAdminApproval: false above, restore this call,
   // and remove the direct payment-instruction call below.
