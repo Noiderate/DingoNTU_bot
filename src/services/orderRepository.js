@@ -1,6 +1,7 @@
 const { getSupabase, unwrap, isUniqueViolation } = require('./supabase');
 const { config } = require('../config');
 const { sgtDateParts } = require('../utils/time');
+const { OUTCOMES, REASONS } = require('./paymentRules');
 
 /**
  * All Supabase access for customers, orders, order items and payment
@@ -497,6 +498,20 @@ async function countLiveVerificationLeases() {
  * The UPDATE is conditional on the lease being absent or expired, so two
  * workers can never take the same job. A job whose function was killed simply
  * has its lease expire and becomes claimable again.
+ *
+ * A candidate can also lose this promotion to the `payment_submissions_*_claim_idx`
+ * unique guards: a submission that was released back to `queued` after a
+ * retryable failure keeps whatever image_sha256/reference_normalized it already
+ * captured, so it can collide with another live submission that shares the same
+ * receipt. That collision is a real duplicate, not a transient error - the
+ * partial index is the source of truth here, not a pre-check - so it is
+ * resolved as `duplicate_rejected` right away instead of being thrown. Left
+ * unhandled, that throw would abort every other candidate in this batch and
+ * reappear on the very next tick, since the poisoned row is still `queued`.
+ *
+ * Returns { submission, duplicates }: `submission` is the job claimed for
+ * processing (or null if none was available), and `duplicates` lists any
+ * candidates resolved this way so the caller can notify their customers.
  */
 async function claimNextSubmission(workerId, { leaseMs = 120000 } = {}) {
   const supabase = getSupabase();
@@ -506,7 +521,7 @@ async function claimNextSubmission(workerId, { leaseMs = 120000 } = {}) {
   const candidates = unwrap(
     await supabase
       .from('payment_submissions')
-      .select('id')
+      .select('id, image_sha256, reference_normalized')
       .in('outcome', ['queued', 'processing'])
       .lte('next_attempt_at', nowIso)
       .or(`locked_until.is.null,locked_until.lt.${nowIso}`)
@@ -515,32 +530,56 @@ async function claimNextSubmission(workerId, { leaseMs = 120000 } = {}) {
     'claimNextSubmission.candidates'
   );
 
+  const duplicates = [];
+
   for (const candidate of candidates) {
-    const rows = unwrap(
-      await supabase
-        .from('payment_submissions')
-        .update({
-          outcome: 'processing',
-          locked_by: workerId,
-          locked_until: new Date(now.getTime() + leaseMs).toISOString(),
-          processing_started_at: nowIso,
-        })
-        .eq('id', candidate.id)
-        // The lease conditions are re-checked here, inside the write, so the
-        // read above being stale cannot cause a double claim.
-        .or(`locked_until.is.null,locked_until.lt.${nowIso}`)
-        .in('outcome', ['queued', 'processing'])
-        .select()
-        .limit(1),
-      'claimNextSubmission.claim'
-    );
+    const result = await supabase
+      .from('payment_submissions')
+      .update({
+        outcome: 'processing',
+        locked_by: workerId,
+        locked_until: new Date(now.getTime() + leaseMs).toISOString(),
+        processing_started_at: nowIso,
+      })
+      .eq('id', candidate.id)
+      // The lease conditions are re-checked here, inside the write, so the
+      // read above being stale cannot cause a double claim.
+      .or(`locked_until.is.null,locked_until.lt.${nowIso}`)
+      .in('outcome', ['queued', 'processing'])
+      .select()
+      .limit(1);
+
+    if (result.error) {
+      if (!isUniqueViolation(result.error)) {
+        unwrap(result, 'claimNextSubmission.claim');
+      }
+
+      const conflict = await findConflictingSubmission({
+        referenceNormalized: candidate.reference_normalized,
+        imageSha256: candidate.image_sha256,
+      });
+
+      const resolved = await updatePaymentSubmission(candidate.id, {
+        outcome: OUTCOMES.DUPLICATE_REJECTED,
+        outcome_reasons: [candidate.reference_normalized ? REASONS.DUPLICATE_REFERENCE : REASONS.DUPLICATE_IMAGE],
+        duplicate_of_submission_id: conflict ? conflict.id : null,
+        completed_at: nowIso,
+        locked_by: null,
+        locked_until: null,
+      });
+
+      duplicates.push({ submission: resolved, conflict });
+      continue;
+    }
+
+    const rows = result.data || [];
 
     if (rows.length) {
-      return rows[0];
+      return { submission: rows[0], duplicates };
     }
   }
 
-  return null;
+  return { submission: null, duplicates };
 }
 
 /** Hand a job back to the queue for a later attempt. */

@@ -548,6 +548,40 @@ async function handleTerminalFailure(bot, { order, submission, error }) {
 }
 
 /**
+ * Notify a customer whose queued receipt turned out to be a duplicate before
+ * verification ever ran on it.
+ *
+ * This is the claim-time counterpart to the DUPLICATE_REJECTED branch of
+ * applyOutcome: repo.claimNextSubmission already resolved the row itself
+ * (it had to, to stop re-throwing on every tick), so all that's left is the
+ * customer-facing side - put their order back in front of them instead of
+ * leaving it stuck at "verifying" with a message that never updates.
+ */
+async function notifyClaimTimeDuplicate(bot, { submission, conflict }) {
+  const orderRow = await repo.getOrderById(submission.order_id);
+
+  if (!orderRow || orderRow.status !== STATUS.VERIFYING_PAYMENT) {
+    return;
+  }
+
+  const order = orderStore.toOrder(orderRow);
+
+  await repo.transitionOrderStatus(
+    order.id, STATUS.VERIFYING_PAYMENT, STATUS.AWAITING_PAYMENT,
+    'ai_verifier', 'Duplicate receipt'
+  );
+
+  await editProcessingMessage(bot, order.chatId, submission.processing_message_id, MESSAGES.DUPLICATE);
+
+  log('warn', 'duplicate_receipt', {
+    order_code: order.code,
+    submission_id: submission.id,
+    conflicting_submission_id: conflict ? conflict.id : null,
+    stage: 'claim',
+  });
+}
+
+/**
  * Scheduled worker entry point: claim and process due jobs until the budget
  * runs out or the concurrency ceiling is reached.
  */
@@ -561,9 +595,19 @@ async function processQueue(bot, { deadline = Date.now() + config.worker.timeBud
       break;
     }
 
-    const submission = await repo.claimNextSubmission(workerId);
+    const { submission, duplicates } = await repo.claimNextSubmission(workerId);
+
+    for (const duplicate of duplicates) {
+      await notifyClaimTimeDuplicate(bot, duplicate);
+    }
 
     if (!submission) {
+      // Nothing claimable right now. If this pass only turned up duplicates,
+      // there may still be genuine work behind them - keep going rather than
+      // stopping the whole worker early.
+      if (duplicates.length) {
+        continue;
+      }
       break;
     }
 
