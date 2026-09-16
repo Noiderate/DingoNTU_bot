@@ -1,0 +1,278 @@
+const { CALLBACKS } = require('../config/constants');
+
+function createCallbackItemToken(value) {
+  const text = String(value || '');
+  let hash = 0;
+
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash * 31) + text.charCodeAt(index)) >>> 0;
+  }
+
+  return hash.toString(36);
+}
+
+/**
+ * Main admin menu keyboard
+ */
+function mainMenuKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '⚙️ Settings', callback_data: CALLBACKS.ADMIN_SETTINGS }],
+      [{ text: '� Enter Delivery Mode', callback_data: CALLBACKS.SETTINGS_DELIVERY_MODE }],
+      [{ text: '�📊 Stats', callback_data: CALLBACKS.ADMIN_STATS }],
+      [{ text: '🔄 Reload Settings', callback_data: CALLBACKS.ADMIN_RELOAD }],
+    ],
+  };
+}
+
+/**
+ * Settings menu keyboard
+ */
+function settingsMenuKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '👥 Manage Admins', callback_data: CALLBACKS.SETTINGS_MANAGE_ADMINS }],
+      [{ text: '�🍔 Manage Food Items', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }],
+      [{ text: '🏢 Manage Halls', callback_data: CALLBACKS.SETTINGS_MANAGE_HALLS }],
+      [{ text: '← Back', callback_data: CALLBACKS.ADMIN_MENU_BACK }],
+    ],
+  };
+}
+
+/**
+ * Manage admins keyboard
+ */
+function manageAdminsKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '➕ Add Admin', callback_data: CALLBACKS.MANAGE_ADD_ADMIN }],
+      [{ text: '➖ Delete Admin', callback_data: CALLBACKS.MANAGE_DELETE_ADMIN }],
+      [{ text: '�️ Set Admin to Tag', callback_data: CALLBACKS.SETTINGS_SET_ADMIN_TAG }],
+      [{ text: '← Back', callback_data: CALLBACKS.ADMIN_SETTINGS }],
+    ],
+  };
+}
+
+/**
+ * Admin list keyboard with delete buttons
+ */
+function adminListKeyboard(adminIds) {
+  const buttons = adminIds.map(adminId => [
+    { text: `${adminId}`, callback_data: `${CALLBACKS.DELETE_ADMIN_PREFIX}${adminId}` }
+  ]);
+  buttons.push([{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_ADMINS }]);
+  return { inline_keyboard: buttons };
+}
+
+/**
+ * Admin selection keyboard for tagging (with usernames)
+ */
+function selectAdminToTagKeyboard(adminList, currentTagAdminId) {
+  const buttons = adminList.map(admin => {
+    const username = admin.username ? `@${admin.username}` : 'no handle';
+    const isCurrent = admin.id === currentTagAdminId ? ' ✓' : '';
+    return [{ text: `${admin.id} (${username})${isCurrent}`, callback_data: `${CALLBACKS.SET_ADMIN_TAG_PREFIX}${admin.id}` }];
+  });
+  buttons.push([{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_ADMINS }]);
+  return { inline_keyboard: buttons };
+}
+
+/**
+ * Add admin prompt keyboard
+ */
+function addAdminKeyboard() {
+  return {
+    inline_keyboard: [[{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_ADMINS }]],
+  };
+}
+
+/**
+ * Back to main menu keyboard
+ */
+function backToMainMenuKeyboard() {
+  return {
+    inline_keyboard: [[{ text: '← Back', callback_data: CALLBACKS.ADMIN_MENU_BACK }]],
+  };
+}
+
+/**
+ * Back to food management keyboard
+ */
+function backToFoodMenuKeyboard() {
+  return {
+    inline_keyboard: [[{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }]],
+  };
+}
+
+/**
+ * Manage food items keyboard
+ */
+function manageFoodItemsKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '➕ Add Food Item', callback_data: CALLBACKS.FOOD_ADD }],
+      [{ text: '➖ Delete Food Item', callback_data: CALLBACKS.FOOD_DELETE }],
+      [{ text: '📊 Edit Specific Stock', callback_data: CALLBACKS.FOOD_EDIT_STOCK }],
+      [{ text: '📊 Edit All Stock', callback_data: CALLBACKS.FOOD_EDIT_ALL_STOCK }],
+      [{ text: '← Back', callback_data: CALLBACKS.ADMIN_SETTINGS }],
+    ],
+  };
+}
+
+/**
+ * Food items with delete buttons
+ */
+function foodItemsDeleteKeyboard(foodItems) {
+  const buttons = foodItems.map(item => [
+    {
+      text: `${item.name} ($${item.price})`,
+      callback_data: `${CALLBACKS.FOOD_DELETE_PREFIX}${item.id}:${createCallbackItemToken(item.name)}`,
+    }
+  ]);
+  buttons.push([{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }]);
+  return { inline_keyboard: buttons };
+}
+
+/**
+ * Food items with stock edit buttons
+ */
+function foodItemsEditStockKeyboard(foodItems) {
+  const buttons = foodItems.map(item => [
+    { text: `${item.name} (Stock: ${item.stock || 0})`, callback_data: `${CALLBACKS.FOOD_EDIT_STOCK_PREFIX}${item.id}` }
+  ]);
+  buttons.push([{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }]);
+  return { inline_keyboard: buttons };
+}
+
+/**
+ * Add food item prompt keyboard
+ */
+function addFoodItemKeyboard() {
+  return {
+    inline_keyboard: [[{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }]],
+  };
+}
+
+/**
+ * Cancel stock editing keyboard
+ */
+function cancelStockEditKeyboard() {
+  return {
+    inline_keyboard: [[{ text: '← Cancel', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }]],
+  };
+}
+
+/**
+ * Manage halls keyboard
+ */
+function manageHallsKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '➕ Add Hall', callback_data: CALLBACKS.HALL_ADD }],
+      [{ text: '➖ Delete Hall', callback_data: CALLBACKS.HALL_DELETE }],
+      [{ text: '← Back', callback_data: CALLBACKS.ADMIN_SETTINGS }],
+    ],
+  };
+}
+
+/**
+ * Halls with delete buttons
+ */
+function hallsDeleteKeyboard(halls) {
+  const buttons = halls.map(hall => [
+    {
+      text: `${hall.name}`,
+      callback_data: `${CALLBACKS.HALL_DELETE_PREFIX}${hall.id}:${createCallbackItemToken(hall.name)}`,
+    }
+  ]);
+  buttons.push([{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_HALLS }]);
+  return { inline_keyboard: buttons };
+}
+
+/**
+ * Add hall prompt keyboard
+ */
+function addHallKeyboard() {
+  return {
+    inline_keyboard: [[{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_HALLS }]],
+  };
+}
+
+/**
+ * Back to halls keyboard
+ */
+function backToHallsKeyboard() {
+  return {
+    inline_keyboard: [[{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_HALLS }]],
+  };
+}
+
+/**
+ * Delivery mode menu keyboard
+ */
+function deliveryModeKeyboard(nextHallToPost, nextHallToPostMode, nextHallToBlock, lastBlockedHall, allHallsBlocked) {
+  const buttons = [];
+
+  if (nextHallToPost) {
+    const postText = nextHallToPostMode === 'preorder'
+      ? `Post preorder available message   `
+      : nextHallToPostMode === 'get-ready'
+      ? `Post in Dingo Channel: Get ready, ${nextHallToPost.shortName || nextHallToPost.name}   `
+      : nextHallToPostMode === 'here'
+      ? `Post in Dingo Channel: ${nextHallToPost.shortName || nextHallToPost.name}, we are here   `
+      : `Post in Dingo Channel: ${nextHallToPost.shortName || nextHallToPost.name}, we are coming   `;
+
+    buttons.push([{
+      text: postText,
+      callback_data: `${CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX}${nextHallToPostMode}:${nextHallToPost.id}`,
+    }]);
+  }
+
+  if (nextHallToBlock) {
+    buttons.push([{
+      text: `⛔ Block Hall ${nextHallToBlock.name}`,
+      callback_data: `${CALLBACKS.DELIVERY_MODE_BLOCK_HALL_PREFIX}${nextHallToBlock.id}`,
+    }]);
+  }
+
+  if (allHallsBlocked) {
+    buttons.push([{
+      text: '✅ Finish Delivery',
+      callback_data: CALLBACKS.DELIVERY_MODE_FINISH,
+    }]);
+  }
+
+  if (lastBlockedHall) {
+    buttons.push([{
+      text: `↩️ Revert ${lastBlockedHall}`,
+      callback_data: CALLBACKS.DELIVERY_MODE_REVERT_BLOCK,
+    }]);
+  }
+
+  buttons.push([{ text: '← Back to Admin Menu', callback_data: CALLBACKS.DELIVERY_MODE_BACK }]);
+
+  return {
+    inline_keyboard: buttons,
+  };
+}
+
+module.exports = {
+  mainMenuKeyboard,
+  settingsMenuKeyboard,
+  manageAdminsKeyboard,
+  adminListKeyboard,
+  selectAdminToTagKeyboard,
+  addAdminKeyboard,
+  backToMainMenuKeyboard,
+  backToFoodMenuKeyboard,
+  manageFoodItemsKeyboard,
+  foodItemsDeleteKeyboard,
+  foodItemsEditStockKeyboard,
+  addFoodItemKeyboard,
+  cancelStockEditKeyboard,
+  manageHallsKeyboard,
+  hallsDeleteKeyboard,
+  addHallKeyboard,
+  backToHallsKeyboard,
+  deliveryModeKeyboard,
+};
