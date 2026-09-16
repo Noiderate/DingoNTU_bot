@@ -10,9 +10,11 @@
 <meta property="og:title" content="Dingo NTU — Supper Truck Delivery">
 <meta property="og:description" content="Late-night supper delivered to your hall at NTU. Order on Telegram.">
 <meta property="og:type" content="website">
+<meta property="og:image" content="/dingo_logo.jpg">
+<meta property="og:image:alt" content="Dingo logo">
 <meta name="theme-color" content="#F2B233">
 
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍜</text></svg>">
+<link rel="icon" type="image/jpeg" href="/dingo_logo.jpg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
@@ -101,16 +103,14 @@
     font-size: 20px;
     letter-spacing: .5px;
   }
-  .badge {
-    width: 46px; height: 46px;
-    flex: 0 0 46px;
+  .brandmark__logo {
+    display: block;
+    width: 64px;
+    height: 64px;
+    flex: 0 0 64px;
     border-radius: 50%;
-    background: var(--cream);
-    border: 3px solid var(--ink);
-    display: grid;
-    place-items: center;
+    object-fit: contain;
   }
-  .badge svg { width: 26px; height: 26px; }
 
   .bar__link {
     font-weight: 700;
@@ -300,15 +300,7 @@
 <header>
   <div class="wrap bar">
     <div class="brandmark">
-      <span class="badge" aria-hidden="true">
-        <!-- Noodle bowl, echoing the logo badge on the flyer -->
-        <svg viewBox="0 0 32 32" fill="none" stroke="#1A1A1A" stroke-width="2.2"
-             stroke-linecap="round" stroke-linejoin="round">
-          <path d="M5 14h22a11 11 0 0 1-11 11A11 11 0 0 1 5 14Z" fill="#F2B233"/>
-          <path d="M3 27h26"/>
-          <path d="M12 10c0-2 2-2 2-4M18 10c0-2 2-2 2-4"/>
-        </svg>
-      </span>
+      <img class="brandmark__logo" src="/dingo_logo.jpg" alt="Dingo logo" width="640" height="640">
       <span>DINGO NTU</span>
     </div>
 
@@ -327,9 +319,7 @@
       </p>
 
       <div class="cta-row">
-        <!-- CHANGE ME: replace DingoNTUBot with your bot's actual @username.
-             The ?start=order suffix opens the bot straight into ordering. -->
-        <a class="btn btn--primary" href="https://t.me/DingoNTUBot?start=order">
+        <a class="btn btn--primary" href="https://t.me/Dingo_post_form_bot?start=order">
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M21.9 4.3 18.7 19c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.4-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.3 12.9l-4.8-1.5c-1-.3-1-1 .2-1.5l18.9-7.3c.9-.3 1.6.2 1.3 1.7Z"/>
           </svg>
