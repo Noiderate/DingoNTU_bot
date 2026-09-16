@@ -1,0 +1,28 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["sin1"],
+  "functions": {
+    "api/telegram-webhook.js": {
+      "maxDuration": 300,
+      "includeFiles": "src/Payment_Instruction.*"
+    },
+    "api/cron/tick.js": {
+      "maxDuration": 300
+    },
+    "api/cron/process-payments.js": {
+      "maxDuration": 300
+    },
+    "api/cron/drain-sheet-outbox.js": {
+      "maxDuration": 120
+    },
+    "api/cron/refresh-preorder.js": {
+      "maxDuration": 60
+    },
+    "api/cron/sweep.js": {
+      "maxDuration": 120
+    },
+    "api/health.js": {
+      "maxDuration": 30
+    }
+  }
+}
