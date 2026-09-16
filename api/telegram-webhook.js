@@ -74,7 +74,7 @@ async function readJsonBody(req) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-module.exports = async function handler(req, res) {
+async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
@@ -148,4 +148,9 @@ module.exports = async function handler(req, res) {
     });
     res.status(200).json({ ok: false, handled: false });
   }
-};
+}
+
+module.exports = handler;
+// Exported for unit tests; the handler itself is the default export.
+module.exports.secretMatches = secretMatches;
+module.exports.claimUpdate = claimUpdate;
