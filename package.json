@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/dev-polling.js",
     "dev": "nodemon src/dev-polling.js",
-    "test": "node --test test/",
+    "test": "node --test",
     "webhook:set": "node scripts/set-webhook.js set",
     "webhook:info": "node scripts/set-webhook.js info",
     "webhook:delete": "node scripts/set-webhook.js delete"
