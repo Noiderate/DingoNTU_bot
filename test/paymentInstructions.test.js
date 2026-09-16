@@ -9,7 +9,7 @@ const order = {
   items: [{ name: 'Rice', quantity: 1, lineTotalCents: 500 }],
 };
 
-test('payment image includes the order summary and requested PayNow wording', async t => {
+test('payment image includes the order summary and requested PayNow wording, followed by an example screenshot', async t => {
   t.mock.method(stateStore, 'get', async () => 'cached-image');
   const photos = [];
   const bot = {
@@ -17,13 +17,14 @@ test('payment image includes the order summary and requested PayNow wording', as
     async sendMessage() { assert.fail('Must not send a separate text message'); },
   };
   await sendPaymentInstructions(bot, order);
-  assert.equal(photos.length, 1);
+  assert.equal(photos.length, 2);
   assert.match(photos[0][2].caption, /Rice x1/);
   assert.match(photos[0][2].caption, /Please use PayNow to pay using the QR above\./);
   assert.match(photos[0][2].caption, /DG20260916-1/);
+  assert.match(photos[1][2].caption, /Example of a valid screenshot/);
 });
 
-test('stale cached image retries the configured QR; cache write failure does not duplicate delivery', async t => {
+test('stale cached image retries the configured QR and example; cache write failure does not duplicate delivery', async t => {
   const previous = config.telegram.paymentInstructionImage;
   config.telegram.paymentInstructionImage = 'src/dingo_qr_code.png';
   t.after(() => { config.telegram.paymentInstructionImage = previous; });
@@ -40,7 +41,8 @@ test('stale cached image retries the configured QR; cache write failure does not
     async sendMessage() { assert.fail('Photo already delivered'); },
   };
   await sendPaymentInstructions(bot, order);
-  assert.equal(sources.length, 2);
+  // One stale + one fresh attempt for the QR, then the same pair for the example.
+  assert.equal(sources.length, 4);
 });
 
 test('large orders fit a photo caption while keeping payment instructions and total', () => {

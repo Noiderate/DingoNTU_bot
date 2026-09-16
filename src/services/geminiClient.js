@@ -197,20 +197,26 @@ function validateExtraction(raw) {
 }
 
 /**
- * Extract structured fields from a receipt image.
- *
- * @param {Buffer} imageBuffer
- * @param {string} mimeType
- * @returns {Promise<{ extraction: object, raw: object, model: string }>}
+ * Whether an error means "this model's quota is spent", as opposed to a
+ * transient timeout or server overload. Those are worth backing off and
+ * retrying on the SAME model; a quota error on the primary model never
+ * resolves itself before a daily reset, so it is worth trying a different
+ * model for instead.
  */
-async function extractReceipt(imageBuffer, mimeType) {
+function isQuotaError(error) {
+  return error instanceof GeminiError
+    && (error.status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(error.message));
+}
+
+/** One call to one specific model. Everything extractReceipt does per model. */
+async function callModel(model, imageBuffer, mimeType) {
   const ai = getClient();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
     const response = await ai.models.generateContent({
-      model: config.gemini.model,
+      model,
       contents: [
         {
           role: 'user',
@@ -247,7 +253,7 @@ async function extractReceipt(imageBuffer, mimeType) {
     return {
       extraction: validateExtraction(parsed),
       raw: parsed,
-      model: config.gemini.model,
+      model,
     };
   } catch (error) {
     if (error instanceof GeminiError) {
@@ -256,6 +262,7 @@ async function extractReceipt(imageBuffer, mimeType) {
 
     const classified = classifyError(error);
     log('warn', 'gemini_request_failed', {
+      model,
       retryable: classified.retryable,
       status: classified.status,
     });
@@ -265,10 +272,42 @@ async function extractReceipt(imageBuffer, mimeType) {
   }
 }
 
+/**
+ * Extract structured fields from a receipt image.
+ *
+ * Tries the configured model first. If that specifically fails on a quota/rate
+ * limit error and a fallback model is configured, it is tried immediately in
+ * the same call rather than burning the caller's retry budget re-hitting a
+ * model that will not recover until its daily quota resets. Any other error -
+ * or a quota error from the fallback too - is thrown as-is for the caller's
+ * normal backoff-and-retry loop to handle.
+ *
+ * @param {Buffer} imageBuffer
+ * @param {string} mimeType
+ * @returns {Promise<{ extraction: object, raw: object, model: string }>}
+ */
+async function extractReceipt(imageBuffer, mimeType) {
+  const primary = config.gemini.model;
+  const fallback = config.gemini.fallbackModel;
+
+  try {
+    return await callModel(primary, imageBuffer, mimeType);
+  } catch (error) {
+    if (!fallback || fallback === primary || !isQuotaError(error)) {
+      throw error;
+    }
+
+    log('warn', 'gemini_fallback_triggered', { primary, fallback, status: error.status });
+
+    return callModel(fallback, imageBuffer, mimeType);
+  }
+}
+
 module.exports = {
   extractReceipt,
   validateExtraction,
   classifyError,
+  isQuotaError,
   GeminiError,
   RECEIPT_SCHEMA,
   SYSTEM_INSTRUCTION,

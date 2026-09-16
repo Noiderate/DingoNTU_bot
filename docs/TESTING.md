@@ -118,6 +118,14 @@ npm run webhook:info            # url set, pending 0, no last_error
       processing message to be edited **once** to
       `This is taking longer than expected, please wait`, and every job to still
       complete. It must never be sent twice.
+- [ ] **Primary model's quota exhausted.** Temporarily set `GEMINI_MODEL` to a
+      model whose quota is already spent (or one that doesn't exist) and leave
+      `GEMINI_FALLBACK_MODEL` at its default. Send a receipt. It should still
+      verify normally — check `payment_submissions.gemini_model` on the row to
+      confirm it recorded the fallback model, not the primary. Set
+      `GEMINI_FALLBACK_MODEL=` (empty) and repeat: the receipt should flag to
+      admins with `VERIFICATION_ERROR` instead, since there is nothing left to
+      fall back to.
 - [ ] **Killed mid-verification.** Set `WORKER_TIME_BUDGET_MS=1000` and send a
       receipt. The job releases itself back to `queued`, and the next
       `/api/cron/tick` finishes it. The customer still gets a verdict.

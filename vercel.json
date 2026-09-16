@@ -4,7 +4,7 @@
   "functions": {
     "api/telegram-webhook.js": {
       "maxDuration": 300,
-      "includeFiles": "src/{Payment_Instruction.*,dingo_qr_code.png}"
+      "includeFiles": "src/{Payment_Instruction.*,dingo_qr_code.png,payment_example.png}"
     },
     "api/cron/tick.js": {
       "maxDuration": 300

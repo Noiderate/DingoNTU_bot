@@ -349,7 +349,17 @@ existing ones.
 | Model renamed or retired | every verification errors, all receipts flagged | Update `GEMINI_MODEL`, redeploy, run `npm test` |
 | Key expired / billing off | same | New key from AI Studio → `GEMINI_API_KEY` → redeploy |
 | Rate limited | slow notices, retries, jobs lingering `queued` | Lower `GEMINI_MAX_CONCURRENCY`, or raise `GEMINI_RPM` on a paid tier |
+| Primary model's daily quota exhausted | `gemini_fallback_triggered` warn logs; check `payment_submissions.gemini_model` to see which model actually answered | Nothing, by design — see below. If it's still not enough, raise the free-tier limit on a paid plan, or point `GEMINI_FALLBACK_MODEL` at a model with more daily headroom |
 | SDK breaking change | build or runtime errors in `geminiClient.js` | Pin the old version, then migrate deliberately |
+
+**A 429 on the primary model doesn't wait it out.** `geminiClient.js` tries
+`GEMINI_FALLBACK_MODEL` (default a Flash Lite model, which gets a much higher
+free-tier daily quota) immediately when the primary model reports a quota/rate
+limit error, rather than burning `VERIFY_MAX_ATTEMPTS` retries against a model
+that will not recover until its daily reset. Every other retryable error
+(timeout, 5xx, overload) still backs off and retries the *same* model, since
+those genuinely are transient. Set `GEMINI_FALLBACK_MODEL=` (empty) to disable
+this and go back to plain retries.
 
 **When Gemini is completely down, ordering still works.** Every receipt is
 flagged to admins and nothing is auto-approved. Customers see "an admin will

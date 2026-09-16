@@ -74,6 +74,12 @@ const config = {
   gemini: {
     apiKey: readString('GEMINI_API_KEY'),
     model: readString('GEMINI_MODEL', 'gemini-3.8-flash'),
+    // Tried when the primary model reports a quota/rate-limit error (429).
+    // Lite tiers get a far higher daily request quota than the primary model,
+    // so this is what keeps verification automatic once the primary's quota
+    // runs out for the day, rather than flagging every receipt to a human
+    // until the reset. Set to '' to disable and fall back to plain retries.
+    fallbackModel: readString('GEMINI_FALLBACK_MODEL', 'gemini-3.1-flash-lite'),
     maxConcurrency: readInt('GEMINI_MAX_CONCURRENCY', 2),
     requestsPerMinute: readInt('GEMINI_RPM', 15),
     slowThresholdMs: readInt('VERIFY_SLOW_THRESHOLD_MS', 8000),

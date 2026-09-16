@@ -563,11 +563,55 @@ async function sendPaymentInstructions(bot, order) {
         log('warn', 'payment_image_cache_write_failed', { error: error.message });
       }
     }
+    await sendPaymentExample(bot, order.chatId);
     return;
   }
   await orderActions.notify(bot, order.chatId,
     caption.replace('Please use PayNow to pay using the QR above.',
       'Payment image unavailable. Please contact an admin for payment details.'));
+}
+
+const PAYMENT_EXAMPLE_IMAGE = 'src/payment_example.png';
+
+/**
+ * Follow-up photo showing what a correctly-completed receipt looks like, so
+ * "UNCROPPED... MUST INCLUDE DATE, TIME AND PAYMENT AMOUNT AND TO WHO" in the
+ * instructions above isn't just text. Best-effort: the real instructions
+ * already went out, so a failure here is logged and swallowed rather than
+ * blocking the order.
+ */
+async function sendPaymentExample(bot, chatId) {
+  let cachedFileId = null;
+  try {
+    cachedFileId = await stateStore.get(stateStore.KEYS.paymentExampleImageFileId(), null);
+  } catch (error) {
+    log('warn', 'payment_example_cache_read_failed', { error: error.message });
+  }
+
+  const caption = '📸 Example of a valid screenshot — yours should show the date, time, amount and who it was paid to, just like this:';
+  const sources = [...new Set([cachedFileId, PAYMENT_EXAMPLE_IMAGE].filter(Boolean))];
+
+  for (const source of sources) {
+    let sent;
+    try {
+      sent = await bot.sendPhoto(chatId, resolveImageSource(source), { caption });
+    } catch (error) {
+      log('warn', 'payment_example_send_failed', { error: error.message });
+      continue;
+    }
+    if (source !== cachedFileId && sent?.photo?.length) {
+      try {
+        await stateStore.set(
+          stateStore.KEYS.paymentExampleImageFileId(),
+          sent.photo[sent.photo.length - 1].file_id,
+          { ttlMs: 30 * 24 * 60 * 60 * 1000 }
+        );
+      } catch (error) {
+        log('warn', 'payment_example_cache_write_failed', { error: error.message });
+      }
+    }
+    return;
+  }
 }
 
 function resolveImageSource(source) {
