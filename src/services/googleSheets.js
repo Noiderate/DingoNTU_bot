@@ -15,62 +15,10 @@ const sheets = google.sheets({ version: 'v4', auth });
 // Store admin IDs globally
 let adminIds = [];
 
-/**
- * Ensure the Orders sheet has header row
- */
-async function ensureOrdersHeaders() {
-  try {
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: 'Orders!A1:K1',
-    });
-
-    const existingHeaders = (response.data.values || [])[0] || [];
-    if (existingHeaders.length > 0) return; // Headers already present
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: 'Orders!A1:K1',
-      valueInputOption: 'RAW',
-      resource: {
-        values: [[
-          'Timestamp',
-          'Order ID',
-          'Status',
-          'User ID',
-          'User Name',
-          'Username',
-          'Hall',
-          'Items',
-          'Total',
-          'Admin ID',
-          'Processed At',
-        ]],
-      },
-    });
-
-    console.log('✓ Orders sheet headers written');
-  } catch (error) {
-    console.error('Error ensuring Orders sheet headers:', error.message);
-  }
-}
-
-/**
- * Initialize Google Sheets and load admin IDs
- */
-async function initializeGoogleSheets() {
-  try {
-    adminIds = await readAdminIds();
-    await ensureOrdersHeaders();
-    console.log(`✓ Google Sheets initialized. Loaded ${adminIds.length} admin(s)`);
-    return true;
-  } catch (error) {
-    console.error('✗ Failed to initialize Google Sheets:', error.message);
-    return false;
-  }
-}
+// The Orders tab's headers and row writes are owned by src/services/sheetMirror.js,
+// which manages the full 18-column layout. The old 11-column header writer and
+// the append-per-action logger that used to live here were removed: both
+// predate the one-row-per-order mirror and would corrupt it if called.
 
 /**
  * Read admin IDs from Settings sheet
@@ -595,48 +543,6 @@ async function deleteHall(rowId) {
 }
 
 /**
- * Log an order decision (confirmed/rejected) to Orders sheet
- */
-async function logOrderAction(order, status, adminId) {
-  try {
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-    const range = 'Orders!A2:K';
-
-    const itemsSummary = (order.items || [])
-      .map(item => `${item.name} x${item.quantity}`)
-      .join(', ');
-
-    const resource = {
-      values: [[
-        new Date().toISOString(),
-        order.id,
-        status,
-        order.userId,
-        order.userName || '',
-        order.username ? `@${order.username}` : '',
-        order.hallName || '',
-        itemsSummary,
-        Number(order.total || 0).toFixed(2),
-        adminId,
-        order.processedAt || '',
-      ]],
-    };
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range,
-      valueInputOption: 'RAW',
-      resource,
-    });
-
-    return { success: true };
-  } catch (error) {
-    console.error('Error logging order action:', error.message);
-    return { success: false, message: error.message };
-  }
-}
-
-/**
  * Get the admin ID to tag in preorder message from Settings sheet B2
  */
 async function getPreorderAdminTag() {
@@ -669,7 +575,6 @@ async function getAdminUsernameById(bot, adminId) {
 }
 
 module.exports = {
-  initializeGoogleSheets,
   readAdminIds,
   ensureAdminIdsLoaded,
   isAdmin,
@@ -688,7 +593,6 @@ module.exports = {
   getHalls,
   addHall,
   deleteHall,
-  logOrderAction,
   getPreorderAdminTag,
   getAdminUsernameById,
 };
