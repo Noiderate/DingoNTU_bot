@@ -57,12 +57,10 @@ npm run webhook:info            # url set, pending 0, no last_error
 - [ ] **Confirm Order.** Customer sees an order code like `DG20260916-1`, the
       hall, the item list and the total.
 - [ ] **Stock deducted.** `FoodAndStock` column C dropped by the right amounts.
-- [ ] **Sheet row appears immediately**, with status
-      `pending_admin_confirmation` — before any admin acts. (This is new; it
-      used to appear only after confirmation.)
-- [ ] **Admins notified** with Confirm / Reject buttons.
-- [ ] **Confirm.** Admin message updates to "Confirmed by admin". Customer gets
-      the payment instruction image, the exact amount, and the deadline.
+- [ ] **Sheet row appears immediately**, with status `awaiting_payment`.
+- [ ] **No admin approval prompt.** New orders do not send Confirm / Reject buttons.
+- [ ] **Payment instructions arrive immediately.** Customer gets the payment
+      instruction image, exact amount, and deadline without waiting for an admin.
 - [ ] **The directive is exact.** The message contains, on its own line:
       `MUST INCLUDE DATE, TIME AND PAYMENT AMOUNT AND TO WHO`
 - [ ] **Send a valid receipt.** Bot replies *immediately* with
@@ -150,7 +148,7 @@ Needs two accounts, or two devices.
 
 ## 6. Expiry
 
-- [ ] With `PAYMENT_EXPIRY_ENABLED=true`, confirm an order and wait past
+- [ ] With `PAYMENT_EXPIRY_ENABLED=true`, submit an order and wait past
       `PAYMENT_WINDOW_MINUTES`. The sweeper expires it, restores stock, and tells
       the customer.
 - [ ] **A screenshot sent just before the deadline still counts**, even if

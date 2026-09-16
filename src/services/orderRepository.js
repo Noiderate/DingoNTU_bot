@@ -134,8 +134,16 @@ async function createOrder({
   hallName,
   items,
   totalCents,
+  requiresAdminApproval = true,
 }) {
   const supabase = getSupabase();
+  const initialStatus = requiresAdminApproval
+    ? STATUS.PENDING_ADMIN_CONFIRMATION
+    : STATUS.AWAITING_PAYMENT;
+  const paymentTiming = requiresAdminApproval ? {} : {
+    payment_requested_at: new Date().toISOString(),
+    payment_due_at: new Date(Date.now() + config.payment.windowMinutes * 60 * 1000).toISOString(),
+  };
 
   const orderCode = unwrap(
     await supabase.rpc('allocate_order_code'),
@@ -151,7 +159,8 @@ async function createOrder({
         telegram_chat_id: telegramChatId,
         hall_sheet_row_id: hallSheetRowId,
         hall_name_snapshot: hallName,
-        status: STATUS.PENDING_ADMIN_CONFIRMATION,
+        status: initialStatus,
+        ...paymentTiming,
         subtotal_cents: totalCents,
         total_cents: totalCents,
       })
@@ -182,7 +191,7 @@ async function createOrder({
   await recordStatusHistory({
     orderId: order.id,
     fromStatus: null,
-    toStatus: STATUS.PENDING_ADMIN_CONFIRMATION,
+    toStatus: initialStatus,
     actor: 'customer',
     actorTelegramId: null,
     reason: 'Order placed',

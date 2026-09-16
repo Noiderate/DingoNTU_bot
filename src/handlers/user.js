@@ -47,7 +47,7 @@ async function isOrderingOpen() {
 
 async function answerCallbackSafely(bot, callbackQueryId, text, options = {}) {
   try {
-    await bot.answerCallbackQuery(callbackQueryId, text, options);
+    await bot.answerCallbackQuery(callbackQueryId, { ...options, text });
     return true;
   } catch (error) {
     const message = error && error.message ? error.message : '';
@@ -531,6 +531,8 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
           hallSheetRowId: cart.hallSheetRowId,
           items: orderItems,
           totalCents,
+          // DO NOT DELETE the legacy admin-approval path. New orders bypass it.
+          requiresAdminApproval: false,
         });
       } catch (error) {
         // Stock was already deducted, so put it back rather than losing it.
@@ -574,16 +576,24 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
 
   await bot.sendMessage(
     chatId,
-    `✅ We are now processing your order.\nPlease wait and be ready to make payment shortly.\n\n`
+    `✅ Your order has been placed. Please make payment and send your receipt for automatic verification.\n\n`
     + `🧾 Order ${reservation.code}\n🏢 Hall: ${reservation.hallName}\n\n`
     + `🧾 Order Summary:\n${orderActions.buildOrderSummary(reservation)}`
   );
 
-  await notifyAdminsOfNewOrder(bot, reservation);
+  // DO NOT DELETE: legacy order approval is intentionally disabled.
+  // To restore it, remove requiresAdminApproval: false above, restore this call,
+  // and remove the direct payment-instruction call below.
+  // await notifyAdminsOfNewOrder(bot, reservation);
+  const { sendPaymentInstructions, refreshPreorderPost } = require('./admin');
+  await sendPaymentInstructions(bot, reservation);
+  await require('./deliveryMode').refreshDeliveryModeMenus(bot);
+  await refreshPreorderPost(bot);
   return true;
 }
 
 async function notifyAdminsOfNewOrder(bot, order) {
+  // DO NOT DELETE: retained for restoring the optional admin-approval flow.
   const text = `🛎️ New Order ${order.code}\n👤 User: ${orderActions.describeCustomer(order)}\n`
     + `🏢 Hall: ${order.hallName}\n\n🧾 Order Summary:\n${orderActions.buildOrderSummary(order)}`;
 

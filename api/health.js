@@ -40,7 +40,7 @@ module.exports = async function handler(req, res) {
   // --- Webhook registration ---
   try {
     const { getBot } = require('../src/app');
-    const info = await getBot().getWebhookInfo();
+    const info = await getBot().getWebHookInfo();
 
     checks.telegram = {
       ok: Boolean(info.url),

@@ -28,7 +28,7 @@ async function main() {
   const bot = getBot();
 
   // Fail loudly rather than sitting silently receiving nothing.
-  const info = await bot.getWebhookInfo();
+  const info = await bot.getWebHookInfo();
 
   if (info.url) {
     console.error(

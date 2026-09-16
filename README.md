@@ -59,9 +59,9 @@ screenshots are read automatically and either approved or sent to an admin.
 1. `/start` (or the channel's deep link) lists halls that are still open.
 2. Picking a hall shows the menu, built live from `FoodAndStock`.
 3. Tapping items builds a cart stored in Postgres.
-4. **Confirm Order** re-checks stock, deducts it, creates the order, and sends it
-   to every admin with Confirm / Reject buttons.
-5. Once an admin confirms, the customer gets the PayNow instructions, the exact
+4. **Confirm Order** re-checks stock, deducts it, creates the order directly in
+   `awaiting_payment`, and immediately sends payment instructions.
+5. The customer gets the PayNow instructions, the exact
    amount due, and a payment deadline.
 6. They reply with a screenshot. The bot answers immediately, verifies in the
    background, and either confirms the payment or tells them an admin will look.
@@ -77,7 +77,8 @@ screenshots are read automatically and either approved or sent to an admin.
 - **Delivery Mode** — the announcement sequencer and per-hall serve lists
 - **Stats** / **Reload Settings**
 
-Order Confirm/Reject and payment Accept/Reject arrive as direct messages.
+Payment Accept/Reject for flagged receipts arrives as direct messages.
+The legacy order Confirm/Reject code is preserved but bypassed for new orders.
 
 ### Delivery mode
 

@@ -447,7 +447,7 @@ async function withOrderLock(bot, query, orderId, task) {
     holder = await stateStore.acquireLock(stateStore.LOCKS.orderAction(orderId), { leaseMs: 30000 });
 
     if (!holder) {
-      await bot.answerCallbackQuery(query.id, 'Another admin action is in progress for this order.');
+      await bot.answerCallbackQuery(query.id, { text: 'Another admin action is in progress for this order.' });
       return true;
     }
 
@@ -460,25 +460,27 @@ async function withOrderLock(bot, query, orderId, task) {
 }
 
 async function handleOrderConfirm(bot, query, chatId, userId, messageId, data) {
+  // DO NOT DELETE: legacy order approval, retained for existing pending orders
+  // and possible re-enabling. New checkout orders go straight to payment.
   const orderId = extractCallbackValue(data, CALLBACKS.ORDER_CONFIRM_PREFIX);
 
   return withOrderLock(bot, query, orderId, async () => {
     const order = await orderStore.getPendingOrder(orderId);
 
     if (!order) {
-      await bot.answerCallbackQuery(query.id, 'Order not found', { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: 'Order not found', show_alert: true });
       return true;
     }
 
     if (order.status !== STATUS.PENDING_ADMIN_CONFIRMATION) {
-      await bot.answerCallbackQuery(query.id, `Order already ${order.status}`, { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: `Order already ${order.status}`, show_alert: true });
       return true;
     }
 
     const confirmed = await orderStore.confirmPendingOrder(orderId, userId);
 
     if (!confirmed) {
-      await bot.answerCallbackQuery(query.id, 'Order is already handled', { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: 'Order is already handled', show_alert: true });
       return true;
     }
 
@@ -491,7 +493,7 @@ async function handleOrderConfirm(bot, query, chatId, userId, messageId, data) {
     await refreshDeliveryModeMenus(bot);
     await refreshPreorderPost(bot);
 
-    await bot.answerCallbackQuery(query.id, 'Order confirmed');
+    await bot.answerCallbackQuery(query.id, { text: 'Order confirmed' });
     return true;
   });
 }
@@ -562,12 +564,12 @@ async function handleOrderReject(bot, query, chatId, userId, messageId, data) {
     const order = await orderStore.getPendingOrder(orderId);
 
     if (!order) {
-      await bot.answerCallbackQuery(query.id, 'Order not found', { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: 'Order not found', show_alert: true });
       return true;
     }
 
     if (order.status !== STATUS.PENDING_ADMIN_CONFIRMATION) {
-      await bot.answerCallbackQuery(query.id, `Order already ${order.status}`, { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: `Order already ${order.status}`, show_alert: true });
       return true;
     }
 
@@ -582,7 +584,7 @@ async function handleOrderReject(bot, query, chatId, userId, messageId, data) {
     });
 
     if (!result.success) {
-      await bot.answerCallbackQuery(query.id, result.message || 'Failed to reject order', { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: result.message || 'Failed to reject order', show_alert: true });
       return true;
     }
 
@@ -595,7 +597,7 @@ async function handleOrderReject(bot, query, chatId, userId, messageId, data) {
     await refreshDeliveryModeMenus(bot);
     await refreshPreorderPost(bot);
 
-    await bot.answerCallbackQuery(query.id, 'Order rejected and stock restored');
+    await bot.answerCallbackQuery(query.id, { text: 'Order rejected and stock restored' });
     return true;
   });
 }
@@ -607,14 +609,14 @@ async function handlePaymentAccept(bot, query, chatId, userId, messageId, data) 
     const order = await orderStore.getPendingOrder(orderId);
 
     if (!order) {
-      await bot.answerCallbackQuery(query.id, 'Order not found', { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: 'Order not found', show_alert: true });
       return true;
     }
 
     const payable = [STATUS.PAYMENT_FLAGGED, STATUS.AWAITING_PAYMENT, STATUS.VERIFYING_PAYMENT];
 
     if (!payable.includes(order.status)) {
-      await bot.answerCallbackQuery(query.id, `Order already ${order.status}`, { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: `Order already ${order.status}`, show_alert: true });
       return true;
     }
 
@@ -628,7 +630,7 @@ async function handlePaymentAccept(bot, query, chatId, userId, messageId, data) 
     });
 
     if (!paid) {
-      await bot.answerCallbackQuery(query.id, 'Order was already handled', { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: 'Order was already handled', show_alert: true });
       return true;
     }
 
@@ -636,7 +638,7 @@ async function handlePaymentAccept(bot, query, chatId, userId, messageId, data) 
     await updateReviewMessage(bot, query, chatId, messageId, `\n\n✅ Payment accepted by admin ${userId}`);
     await refreshDeliveryModeMenus(bot);
 
-    await bot.answerCallbackQuery(query.id, 'Payment accepted');
+    await bot.answerCallbackQuery(query.id, { text: 'Payment accepted' });
     return true;
   });
 }
@@ -648,14 +650,14 @@ async function handlePaymentReject(bot, query, chatId, userId, messageId, data) 
     const order = await orderStore.getPendingOrder(orderId);
 
     if (!order) {
-      await bot.answerCallbackQuery(query.id, 'Order not found', { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: 'Order not found', show_alert: true });
       return true;
     }
 
     const rejectable = [STATUS.PAYMENT_FLAGGED, STATUS.AWAITING_PAYMENT, STATUS.VERIFYING_PAYMENT];
 
     if (!rejectable.includes(order.status)) {
-      await bot.answerCallbackQuery(query.id, `Order already ${order.status}`, { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: `Order already ${order.status}`, show_alert: true });
       return true;
     }
 
@@ -669,7 +671,7 @@ async function handlePaymentReject(bot, query, chatId, userId, messageId, data) 
     });
 
     if (!result.success) {
-      await bot.answerCallbackQuery(query.id, result.message || 'Failed to reject payment', { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: result.message || 'Failed to reject payment', show_alert: true });
       return true;
     }
 
@@ -680,7 +682,7 @@ async function handlePaymentReject(bot, query, chatId, userId, messageId, data) 
     );
     await refreshDeliveryModeMenus(bot);
 
-    await bot.answerCallbackQuery(query.id, 'Payment rejected and stock restored');
+    await bot.answerCallbackQuery(query.id, { text: 'Payment rejected and stock restored' });
     return true;
   });
 }
@@ -732,7 +734,7 @@ async function updateReviewMessage(bot, query, chatId, messageId, suffix) {
 // --- Settings menus (behaviour unchanged) ------------------------------------
 
 async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
-  const answer = (text, options) => bot.answerCallbackQuery(query.id, text, options);
+  const answer = (text, options) => bot.answerCallbackQuery(query.id, { ...options, text });
 
   if (data === CALLBACKS.ADMIN_SETTINGS) {
     await updateMenuMessage(bot, chatId, userId, menuTexts.settingsMenuText(), keyboards.settingsMenuKeyboard());
@@ -1108,7 +1110,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
     holder = await stateStore.acquireLock(stateStore.LOCKS.deliveryPost(), { leaseMs: 30000 });
 
     if (!holder) {
-      await bot.answerCallbackQuery(query.id, 'A delivery update is already being posted.');
+      await bot.answerCallbackQuery(query.id, { text: 'A delivery update is already being posted.' });
       return true;
     }
 
@@ -1116,7 +1118,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
     const hall = halls.find(entry => entry.id === hallId);
 
     if (!hall || !['preorder', 'coming', 'here', 'get-ready'].includes(postMode)) {
-      await bot.answerCallbackQuery(query.id, 'Hall not found', { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: 'Hall not found', show_alert: true });
       return true;
     }
 
@@ -1124,8 +1126,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
       await refreshDeliveryModeMenus(bot);
       await bot.answerCallbackQuery(
         query.id,
-        'This button is outdated. Please use the latest delivery menu.',
-        { show_alert: true }
+        { text: 'This button is outdated. Please use the latest delivery menu.', show_alert: true }
       );
       return true;
     }
@@ -1133,7 +1134,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
     const channelId = config.telegram.dingoChannelId;
 
     if (!channelId) {
-      await bot.answerCallbackQuery(query.id, 'DINGO_CHANNEL_ID is not set in the environment.', { show_alert: true });
+      await bot.answerCallbackQuery(query.id, { text: 'DINGO_CHANNEL_ID is not set in the environment.', show_alert: true });
       return true;
     }
 
@@ -1169,8 +1170,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
       log('error', 'dingo_post_failed', { hall: hallLabel, error: error.message });
       await bot.answerCallbackQuery(
         query.id,
-        'Failed to post to the Dingo channel. Check the channel ID and bot permissions.',
-        { show_alert: true }
+        { text: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.', show_alert: true }
       );
       return true;
     }
@@ -1208,7 +1208,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
 
     await bot.answerCallbackQuery(
       query.id,
-      postMode === 'preorder' ? 'Posted preorder availability to Dingo channel.' : `Posted to Dingo channel: ${text}`
+      { text: postMode === 'preorder' ? 'Posted preorder availability to Dingo channel.' : `Posted to Dingo channel: ${text}` }
     );
     return true;
   } finally {
@@ -1224,7 +1224,7 @@ async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
   const served = await orderStore.markOrderServed(orderId, userId);
 
   if (!served) {
-    await bot.answerCallbackQuery(query.id, 'Order is already served or no longer active.');
+    await bot.answerCallbackQuery(query.id, { text: 'Order is already served or no longer active.' });
     return true;
   }
 
@@ -1262,7 +1262,7 @@ async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
   }
 
   await refreshDeliveryModeMenus(bot);
-  await bot.answerCallbackQuery(query.id, `Order ${served.code} marked as served.`);
+  await bot.answerCallbackQuery(query.id, { text: `Order ${served.code} marked as served.` });
   return true;
 }
 
