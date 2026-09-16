@@ -1,9 +1,10 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { config, assertRequiredConfig } = require('./config');
-const stateStore = require('./services/stateStore');
+const { noteChatMessage, isMessageLatestInChat } = require('./services/chatTracker');
 const { isAdmin, ensureAdminIdsLoaded } = require('./services/googleSheets');
 const { handleAdminCommand, handleAdminCallback } = require('./handlers/admin');
 const { handleUserCommand, handleUserCallback, handleUserPhoto, sendFallbackHint } = require('./handlers/user');
+const { isImageDocument } = require('./utils/telegramFiles');
 const { log } = require('./utils/logger');
 
 /**
@@ -70,39 +71,25 @@ function instrumentSendMethods(botInstance) {
   botInstance.sendPhoto = async (...args) => track(await originalSendPhoto(...args));
 }
 
-async function noteChatMessage(chatId, messageId) {
-  if (!chatId || !messageId) {
-    return;
-  }
-
-  const key = stateStore.KEYS.latestChatMessage(chatId);
-  const current = await stateStore.get(key, 0);
-
-  if (Number(messageId) > Number(current || 0)) {
-    // Expires after a day: stale positioning data is worthless and this keeps
-    // bot_state from growing without bound.
-    await stateStore.set(key, Number(messageId), { ttlMs: 24 * 60 * 60 * 1000 });
-  }
-}
-
-async function isMessageLatestInChat(chatId, messageId) {
-  const current = await stateStore.get(stateStore.KEYS.latestChatMessage(chatId), 0);
-  return Number(current || 0) === Number(messageId);
-}
-
-
 // --- Dispatch ----------------------------------------------------------------
 
 /**
  * Route one message. Dispatch order is unchanged from the original:
  * admin handlers first, then user handlers, then the fallback.
  */
-async function dispatchMessage(botInstance, msg) {
+async function dispatchMessage(botInstance, msg, deferred) {
   await noteChatMessageIfAdmin(msg);
 
   // Photos and image documents are payment receipts.
   if (msg.photo || isImageDocument(msg.document)) {
-    if (await handleUserPhoto(botInstance, msg)) {
+    const result = await handleUserPhoto(botInstance, msg);
+
+    if (result) {
+      // Verification is slow, so it is handed back to the caller to run after
+      // the response rather than making Telegram wait for a Gemini round trip.
+      if (result.submissionId) {
+        deferred.push(() => verifySubmission(botInstance, result.submissionId));
+      }
       return;
     }
   }
@@ -118,6 +105,19 @@ async function dispatchMessage(botInstance, msg) {
   // Replaces the original `You said: ...` echo, which made an ordering bot look
   // broken when someone typed anything unrecognised.
   await sendFallbackHint(botInstance, msg);
+}
+
+/**
+ * Required lazily: paymentVerifier pulls in the handlers, so importing it at
+ * module scope would create a cycle with this file.
+ */
+async function verifySubmission(botInstance, submissionId) {
+  const { processSubmission } = require('./services/paymentVerifier');
+  const { config } = require('./config');
+
+  await processSubmission(botInstance, submissionId, {
+    deadline: Date.now() + config.worker.timeBudgetMs,
+  });
 }
 
 async function dispatchCallback(botInstance, query) {
@@ -138,16 +138,6 @@ async function noteChatMessageIfAdmin(msg) {
   }
 }
 
-const RECEIPT_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-
-/**
- * Customers are told they may send the receipt "as a file" to avoid Telegram's
- * photo compression, which can render a reference number unreadable.
- */
-function isImageDocument(document) {
-  return Boolean(document) && RECEIPT_MIME_TYPES.includes(document.mime_type);
-}
-
 /**
  * Handle one Telegram update to completion.
  *
@@ -162,20 +152,22 @@ async function handleUpdate(update) {
   // demand and cached per warm instance.
   await ensureAdminIdsLoaded();
 
+  // Slow follow-up work the caller should run after responding. The webhook
+  // passes these to waitUntil; dev-polling simply awaits them.
+  const deferred = [];
+
   if (update.message) {
-    await dispatchMessage(botInstance, update.message);
-    return;
-  }
-
-  if (update.callback_query) {
+    await dispatchMessage(botInstance, update.message, deferred);
+  } else if (update.callback_query) {
     await dispatchCallback(botInstance, update.callback_query);
-    return;
+  } else {
+    log('info', 'update_ignored', {
+      update_id: update.update_id,
+      kinds: Object.keys(update).filter(key => key !== 'update_id'),
+    });
   }
 
-  log('info', 'update_ignored', {
-    update_id: update.update_id,
-    kinds: Object.keys(update).filter(key => key !== 'update_id'),
-  });
+  return { deferred };
 }
 
 /** Update kinds the bot actually uses, passed to setWebhook. */

@@ -1,174 +1,245 @@
 const { getHalls, getFoodItems } = require('../services/googleSheets');
 const keyboards = require('../utils/keyboards');
 const menuTexts = require('../utils/menuTexts');
-const { getActiveOrders, getLastBlockedHall, isHallBlocked } = require('../services/orderStore');
+const orderStore = require('../services/orderStore');
+const stateStore = require('../services/stateStore');
+const { getSupabase, unwrap } = require('../services/supabase');
+const {
+  noteChatMessage,
+  isMessageLatestInChat,
+  getMenuMessageId,
+  setMenuMessageId,
+} = require('../services/chatTracker');
+const { log } = require('../utils/logger');
 
-const deliveryModeViewers = {};
-const latestKnownChatMessages = {};
-let nextHallToPostIndex = 0;
-let nextHallToPostMode = 'preorder';
-const dingoMsgIds = { coming: null, here: null, 'get-ready': null };
-let preorderMsgId = null;
-let preorderChannelId = null;
+/**
+ * Delivery mode: the sequencer that walks each hall through its channel
+ * announcements and tracks which orders still need serving.
+ *
+ * Behaviour is unchanged from the original. What changed is where the state
+ * lives: the sequencer position, the posted channel message ids and the list of
+ * admins currently viewing the menu were all module-level variables, which do
+ * not survive a serverless instance ending.
+ */
 
-function recordPreorderPost(channelId, msgId) {
-  preorderChannelId = channelId;
-  preorderMsgId = msgId;
+const DEFAULT_SEQUENCER = { index: 0, mode: 'preorder' };
+
+async function getSequencer() {
+  return stateStore.get(stateStore.KEYS.deliverySequencer(), DEFAULT_SEQUENCER);
 }
 
-function getPreorderPost() {
-  return { channelId: preorderChannelId, msgId: preorderMsgId };
+async function setSequencer(value) {
+  return stateStore.set(stateStore.KEYS.deliverySequencer(), value);
 }
 
-function hasPreorderPost() {
-  return Boolean(preorderMsgId);
+async function getDingoPosts() {
+  return stateStore.get(stateStore.KEYS.dingoPosts(), { coming: null, here: null, 'get-ready': null });
 }
 
-function recordDingoPost(mode, msgId) {
-  dingoMsgIds[mode] = msgId;
+async function setDingoPosts(value) {
+  return stateStore.set(stateStore.KEYS.dingoPosts(), value);
 }
 
-function getDingoMsgIdsToDelete(mode) {
+async function recordPreorderPost(channelId, msgId) {
+  return stateStore.set(stateStore.KEYS.preorderPost(), {
+    channelId: String(channelId),
+    msgId,
+    contentHash: null,
+  });
+}
+
+async function getPreorderPost() {
+  return stateStore.get(stateStore.KEYS.preorderPost(), { channelId: null, msgId: null, contentHash: null });
+}
+
+/**
+ * Whether ordering is open. Gated on a preorder post existing, exactly as
+ * before - the difference is that this is now durable, so a redeploy no longer
+ * silently closes ordering mid-run.
+ */
+async function hasPreorderPost() {
+  const post = await getPreorderPost();
+  return Boolean(post && post.msgId);
+}
+
+async function recordDingoPost(mode, msgId) {
+  const posts = await getDingoPosts();
+  posts[mode] = msgId;
+  return setDingoPosts(posts);
+}
+
+/**
+ * Which previously-posted channel messages this new post supersedes.
+ *
+ * Unchanged logic: posting "we are here" clears the "coming" message, and
+ * posting "coming" for the next hall clears the previous "here"/"get ready".
+ */
+async function getDingoMsgIdsToDelete(mode) {
+  const posts = await getDingoPosts();
   const toDelete = [];
+
   if (mode === 'here') {
-    if (dingoMsgIds.coming) toDelete.push(dingoMsgIds.coming);
-    dingoMsgIds.coming = null;
+    if (posts.coming) toDelete.push(posts.coming);
+    posts.coming = null;
   } else if (mode === 'coming') {
-    if (dingoMsgIds.here) toDelete.push(dingoMsgIds.here);
-    if (dingoMsgIds['get-ready']) toDelete.push(dingoMsgIds['get-ready']);
-    dingoMsgIds.here = null;
-    dingoMsgIds['get-ready'] = null;
+    if (posts.here) toDelete.push(posts.here);
+    if (posts['get-ready']) toDelete.push(posts['get-ready']);
+    posts.here = null;
+    posts['get-ready'] = null;
   }
+
+  await setDingoPosts(posts);
   return toDelete;
 }
 
-function consumeTrackedDingoMessageIds() {
-  const trackedMessageIds = [
-    preorderMsgId,
-    dingoMsgIds.coming,
-    dingoMsgIds.here,
-    dingoMsgIds['get-ready'],
-  ].filter(Boolean);
+/** Collect every tracked channel message id and reset the sequencer. */
+async function consumeTrackedDingoMessageIds() {
+  const posts = await getDingoPosts();
+  const preorder = await getPreorderPost();
 
-  preorderMsgId = null;
-  preorderChannelId = null;
-  dingoMsgIds.coming = null;
-  dingoMsgIds.here = null;
-  dingoMsgIds['get-ready'] = null;
-  nextHallToPostIndex = 0;
-  nextHallToPostMode = 'preorder';
+  const ids = [preorder.msgId, posts.coming, posts.here, posts['get-ready']].filter(Boolean);
 
-  return [...new Set(trackedMessageIds)];
+  await setDingoPosts({ coming: null, here: null, 'get-ready': null });
+  await stateStore.remove(stateStore.KEYS.preorderPost());
+  await setSequencer({ ...DEFAULT_SEQUENCER });
+
+  return [...new Set(ids)];
 }
 
-function getNextHallToPostState(halls) {
+async function getNextHallToPostState(halls) {
+  const sequencer = await getSequencer();
+
   if (!halls.length) {
-    return { hall: null, mode: nextHallToPostMode };
+    return { hall: null, mode: sequencer.mode };
   }
 
-  nextHallToPostIndex %= halls.length;
-  return { hall: halls[nextHallToPostIndex], mode: nextHallToPostMode };
+  const index = sequencer.index % halls.length;
+  return { hall: halls[index], mode: sequencer.mode };
 }
 
-function isExpectedNextHallToPost(halls, hallId, mode) {
-  const { hall, mode: currentMode } = getNextHallToPostState(halls);
-  if (!hall) {
-    return false;
-  }
-
-  return hall.id === hallId && currentMode === mode;
+async function isExpectedNextHallToPost(halls, hallId, mode) {
+  const { hall, mode: currentMode } = await getNextHallToPostState(halls);
+  return Boolean(hall) && hall.id === hallId && currentMode === mode;
 }
 
-function advanceNextHallToPost(halls, currentHallId, currentMode) {
+/**
+ * Advance the sequencer after a successful post.
+ *
+ * The cycle per hall is preorder -> coming -> here, then get-ready for the next
+ * hall. Logic is a direct port of the original.
+ */
+async function advanceNextHallToPost(halls, currentHallId, currentMode) {
   if (!halls.length) {
-    nextHallToPostIndex = 0;
-    nextHallToPostMode = 'coming';
+    await setSequencer({ index: 0, mode: 'coming' });
     return { hall: null, mode: 'coming' };
   }
 
   if (halls.length === 1) {
-    nextHallToPostIndex = 0;
-    nextHallToPostMode = 'coming';
+    await setSequencer({ index: 0, mode: 'coming' });
     return { hall: halls[0], mode: 'coming' };
   }
 
-  const currentHallIndex = halls.findIndex(hall => hall.id === currentHallId);
-  if (currentHallIndex === -1) {
-    nextHallToPostIndex %= halls.length;
-    return { hall: halls[nextHallToPostIndex], mode: nextHallToPostMode };
+  const currentIndex = halls.findIndex(hall => hall.id === currentHallId);
+
+  if (currentIndex === -1) {
+    const sequencer = await getSequencer();
+    const index = sequencer.index % halls.length;
+    return { hall: halls[index], mode: sequencer.mode };
   }
+
+  let next;
 
   if (currentMode === 'get-ready') {
-    nextHallToPostIndex = currentHallIndex;
-    nextHallToPostMode = 'coming';
-  } else if (currentMode === 'preorder' || currentMode === 'coming') {
-    nextHallToPostIndex = currentHallIndex;
-    nextHallToPostMode = currentMode === 'preorder' ? 'coming' : 'here';
+    next = { index: currentIndex, mode: 'coming' };
+  } else if (currentMode === 'preorder') {
+    next = { index: currentIndex, mode: 'coming' };
+  } else if (currentMode === 'coming') {
+    next = { index: currentIndex, mode: 'here' };
   } else {
-    // 'here' → get-ready for next hall
-    nextHallToPostIndex = (currentHallIndex + 1) % halls.length;
-    nextHallToPostMode = 'get-ready';
+    next = { index: (currentIndex + 1) % halls.length, mode: 'get-ready' };
   }
 
-  return { hall: halls[nextHallToPostIndex], mode: nextHallToPostMode };
+  await setSequencer(next);
+  return { hall: halls[next.index], mode: next.mode };
 }
+
+
+// --- Menu rendering ----------------------------------------------------------
 
 async function getDeliveryModeView() {
   const halls = await getHalls();
   const foodItems = await getFoodItems();
-  const orders = getActiveOrders();
-  const { hall: nextHallToPost, mode: nextHallToPostMode } = getNextHallToPostState(halls);
-  const nextHallToBlock = halls.find(hall => !isHallBlocked(hall.name)) || null;
-  const lastBlockedHall = getLastBlockedHall();
-  const allHallsBlocked = halls.length > 0 && halls.every(hall => isHallBlocked(hall.name));
+  const orders = await orderStore.getActiveOrders();
+  const blocked = await orderStore.loadBlockedHalls();
+
+  const { hall: nextHallToPost, mode } = await getNextHallToPostState(halls);
+  const nextHallToBlock = halls.find(hall => !blocked.isBlocked(hall.name)) || null;
+  const allHallsBlocked = halls.length > 0 && halls.every(hall => blocked.isBlocked(hall.name));
 
   return {
     text: menuTexts.deliveryModeText(halls, orders, foodItems),
-    keyboard: keyboards.deliveryModeKeyboard(nextHallToPost, nextHallToPostMode, nextHallToBlock, lastBlockedHall, allHallsBlocked),
+    keyboard: keyboards.deliveryModeKeyboard(
+      nextHallToPost,
+      mode,
+      nextHallToBlock,
+      blocked.last,
+      allHallsBlocked
+    ),
   };
 }
 
-function setDeliveryModeViewer(userId, chatId) {
-  deliveryModeViewers[userId] = chatId;
+async function setDeliveryModeViewer(userId, chatId) {
+  // Expires so an admin who wandered off does not keep being refreshed forever.
+  await stateStore.set(stateStore.KEYS.deliveryViewer(userId), { chatId }, { ttlMs: 12 * 60 * 60 * 1000 });
 }
 
-function clearDeliveryModeViewer(userId) {
-  delete deliveryModeViewers[userId];
+async function clearDeliveryModeViewer(userId) {
+  await stateStore.remove(stateStore.KEYS.deliveryViewer(userId));
 }
 
-function noteChatMessage(chatId, messageId) {
-  if (!chatId || !messageId) {
-    return;
-  }
+async function listDeliveryModeViewers() {
+  const supabase = getSupabase();
 
-  const currentLatestMessageId = latestKnownChatMessages[chatId] || 0;
-  latestKnownChatMessages[chatId] = Math.max(currentLatestMessageId, messageId);
+  const rows = unwrap(
+    await supabase
+      .from('bot_state')
+      .select('key, value, expires_at')
+      .like('key', 'delivery:viewer:%'),
+    'listDeliveryModeViewers'
+  );
+
+  const now = Date.now();
+
+  return (rows || [])
+    .filter(row => !row.expires_at || new Date(row.expires_at).getTime() > now)
+    .map(row => ({
+      userId: row.key.replace('delivery:viewer:', ''),
+      chatId: row.value && row.value.chatId,
+    }))
+    .filter(viewer => viewer.chatId);
 }
 
-function isMessageLatestInChat(chatId, messageId) {
-  return latestKnownChatMessages[chatId] === messageId;
-}
-
-async function sendDeliveryModeMenu(bot, chatId, userId, userMenuMessages) {
+async function sendDeliveryModeMenu(bot, chatId, userId) {
   const { text, keyboard } = await getDeliveryModeView();
-  const currentMessageId = userMenuMessages[userId];
+  const currentMessageId = await getMenuMessageId(userId);
 
-  if (currentMessageId && isMessageLatestInChat(chatId, currentMessageId)) {
+  // Edit in place while the menu is still the newest message in the chat;
+  // otherwise repost so it stays at the bottom where the admin is looking.
+  if (currentMessageId && await isMessageLatestInChat(chatId, currentMessageId)) {
     try {
       await bot.editMessageText(text, {
         chat_id: chatId,
         message_id: currentMessageId,
         reply_markup: keyboard,
       });
-      setDeliveryModeViewer(userId, chatId);
+      await setDeliveryModeViewer(userId, chatId);
       return;
     } catch (error) {
-      if (!error.message || !error.message.includes('message is not modified')) {
-        console.error(`Error editing delivery mode message for admin ${userId}:`, error.message);
-      } else {
-        setDeliveryModeViewer(userId, chatId);
+      if (String(error.message || '').includes('message is not modified')) {
+        await setDeliveryModeViewer(userId, chatId);
         return;
       }
+      log('warn', 'delivery_menu_edit_failed', { error: error.message });
     }
   }
 
@@ -176,60 +247,58 @@ async function sendDeliveryModeMenu(bot, chatId, userId, userMenuMessages) {
     try {
       await bot.deleteMessage(chatId, currentMessageId);
     } catch (error) {
-      console.error(`Error deleting previous delivery mode message for admin ${userId}:`, error.message);
+      log('warn', 'delivery_menu_delete_failed', { error: error.message });
     }
   }
 
-  const sentMessage = await bot.sendMessage(chatId, text, { reply_markup: keyboard });
-  userMenuMessages[userId] = sentMessage.message_id;
-  noteChatMessage(chatId, sentMessage.message_id);
-  setDeliveryModeViewer(userId, chatId);
+  const sent = await bot.sendMessage(chatId, text, { reply_markup: keyboard });
+  await setMenuMessageId(userId, sent.message_id);
+  await noteChatMessage(chatId, sent.message_id);
+  await setDeliveryModeViewer(userId, chatId);
+}
+
+async function showDeliveryModeMenu(bot, chatId, userId) {
+  await sendDeliveryModeMenu(bot, chatId, userId);
 }
 
 /**
- * Show the delivery mode menu
+ * Re-render the delivery menu for every admin currently viewing it.
+ *
+ * Called after anything that changes what the menu shows, which is what
+ * replaces the old 5-second polling loop.
  */
-async function showDeliveryModeMenu(bot, chatId, userId, userMenuMessages) {
-  await sendDeliveryModeMenu(bot, chatId, userId, userMenuMessages);
-}
+async function refreshDeliveryModeMenus(bot) {
+  const viewers = await listDeliveryModeViewers();
 
-async function refreshDeliveryModeMenus(bot, userMenuMessages) {
-  const viewerIds = Object.keys(deliveryModeViewers);
-
-  if (viewerIds.length === 0) {
-    return;
-  }
-
-  for (const userId of viewerIds) {
-    const chatId = deliveryModeViewers[userId];
-    const messageId = userMenuMessages[userId];
-
-    if (!messageId) {
-      clearDeliveryModeViewer(userId);
-      continue;
-    }
-
+  for (const viewer of viewers) {
     try {
-      await sendDeliveryModeMenu(bot, chatId, userId, userMenuMessages);
+      await sendDeliveryModeMenu(bot, viewer.chatId, viewer.userId);
     } catch (error) {
-      clearDeliveryModeViewer(userId);
-      console.error(`Error refreshing delivery mode for admin ${userId}:`, error.message);
+      await clearDeliveryModeViewer(viewer.userId);
+      log('warn', 'delivery_menu_refresh_failed', { error: error.message });
     }
   }
 }
 
 module.exports = {
+  DEFAULT_SEQUENCER,
+  getSequencer,
+  setSequencer,
   advanceNextHallToPost,
   isExpectedNextHallToPost,
+  getNextHallToPostState,
   recordDingoPost,
   getDingoMsgIdsToDelete,
   consumeTrackedDingoMessageIds,
   recordPreorderPost,
   getPreorderPost,
   hasPreorderPost,
+  getDeliveryModeView,
   showDeliveryModeMenu,
+  sendDeliveryModeMenu,
   setDeliveryModeViewer,
   clearDeliveryModeViewer,
+  listDeliveryModeViewers,
   refreshDeliveryModeMenus,
   noteChatMessage,
 };
