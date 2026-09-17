@@ -45,6 +45,59 @@ async function isOrderingOpen() {
   return hasPreorderPost();
 }
 
+
+// --- Phone number collection ---------------------------------------------------
+
+/**
+ * Staff at a hall need a way to identify a customer that survives them
+ * closing the app - a Telegram handle doesn't. Collected once, the first
+ * time (or the first time since this shipped) a customer confirms an order.
+ *
+ * Kept permissive rather than Singapore-only: NTU has a lot of international
+ * students, and rejecting a real foreign number would just block an order for
+ * no benefit. Strips everything but digits and accepts a plausible length.
+ */
+function normalizePhoneNumber(text) {
+  const digits = String(text || '').replace(/\D/g, '');
+  return digits.length >= 7 && digits.length <= 15 ? digits : null;
+}
+
+async function requestPhoneNumber(bot, chatId, userId) {
+  await stateStore.set(stateStore.KEYS.awaitingPhoneNumber(userId), true, { ttlMs: 30 * 60 * 1000 });
+
+  await bot.sendMessage(
+    chatId,
+    '📱 Before we can confirm your order, we need a contact number so staff can reach you at the hall.\n\n'
+    + 'Please reply with your phone number (e.g. 91234567), then tap ✅ Confirm Order again.'
+  );
+}
+
+async function handlePhoneNumberReply(bot, msg) {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const phoneNumber = normalizePhoneNumber(msg.text);
+
+  if (!phoneNumber) {
+    await bot.sendMessage(
+      chatId,
+      "❌ That doesn't look like a valid phone number. Please reply with just the digits, e.g. 91234567."
+    );
+    return true;
+  }
+
+  await repo.upsertCustomer({
+    telegramUserId: userId,
+    username: msg.from.username || null,
+    firstName: msg.from.first_name || null,
+    lastName: null,
+    phoneNumber,
+  });
+
+  await stateStore.remove(stateStore.KEYS.awaitingPhoneNumber(userId));
+  await bot.sendMessage(chatId, '✅ Thanks! Now tap ✅ Confirm Order again to complete your order.');
+  return true;
+}
+
 async function answerCallbackSafely(bot, callbackQueryId, text, options = {}) {
   try {
     await bot.answerCallbackQuery(callbackQueryId, { ...options, text });
@@ -142,6 +195,15 @@ async function handleUserCommand(bot, msg) {
 
   if (!text) {
     return false;
+  }
+
+  // A slash command always wins over a pending phone-number prompt, same as
+  // the admin input-state pattern - typing /start mid-prompt should not get
+  // swallowed as a (garbage) phone number attempt.
+  const isCommand = text.startsWith('/');
+
+  if (!isCommand && await stateStore.get(stateStore.KEYS.awaitingPhoneNumber(userId))) {
+    return handlePhoneNumberReply(bot, msg);
   }
 
   // Handles the /start order deep link from the channel post too.
@@ -423,6 +485,17 @@ async function handleClearCart(bot, query, chatId, userId) {
  * confirming the last item at the same time.
  */
 async function handleConfirmOrder(bot, query, chatId, userId) {
+  // Checked before the lock/stock touch anything: a customer with no phone
+  // number on file (their first order, or any order predating this feature)
+  // gets asked for one and must tap Confirm Order again once they reply.
+  const customer = await repo.getCustomerByTelegramId(userId);
+
+  if (!customer || !customer.phone_number) {
+    await answerCallbackSafely(bot, query.id);
+    await requestPhoneNumber(bot, chatId, userId);
+    return true;
+  }
+
   let reservation = null;
 
   try {
@@ -480,6 +553,7 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
       }
 
       const stockUpdates = [];
+      const stockChanges = [];
       const orderItems = [];
       let totalCents = 0;
 
@@ -499,7 +573,11 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
         const unitPriceCents = toCents(item.price) || 0;
         totalCents += unitPriceCents * quantity;
 
-        stockUpdates.push({ rowId: item.id, newStock: (item.stock || 0) - quantity });
+        const oldStock = item.stock || 0;
+        const newStock = oldStock - quantity;
+
+        stockUpdates.push({ rowId: item.id, newStock });
+        stockChanges.push({ name: item.name, oldStock, newStock });
         orderItems.push({
           foodSheetRowId: item.id,
           name: item.name,
@@ -553,7 +631,10 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
       await cartStore.clearCart(userId);
       await answerCallbackSafely(bot, query.id, 'Processing your order...');
 
-      return order;
+      // stockChanges is only announced once the order actually exists - if
+      // creation had failed above, the deduction was reverted, so nothing
+      // really sold out.
+      return { order, stockChanges };
     });
   } catch (error) {
     if (error.code === 'LOCK_TIMEOUT') {
@@ -567,6 +648,8 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
     return true;
   }
 
+  const { order, stockChanges } = reservation;
+
   // Everything below is outside the lock: it talks to Telegram, not to stock.
   try {
     await bot.deleteMessage(chatId, query.message.message_id);
@@ -577,12 +660,12 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
   // DO NOT DELETE: legacy order approval is intentionally disabled.
   // To restore it, remove requiresAdminApproval: false above, restore this call,
   // and remove the direct payment-instruction call below.
-  // await notifyAdminsOfNewOrder(bot, reservation);
-  const { sendPaymentInstructions, refreshPreorderPost, refreshHallServeOrdersMessage } = require('./admin');
-  await sendPaymentInstructions(bot, reservation);
+  // await notifyAdminsOfNewOrder(bot, order);
+  const { sendPaymentInstructions, refreshPreorderPostAfterStockChange, refreshHallServeOrdersMessage } = require('./admin');
+  await sendPaymentInstructions(bot, order);
   await require('./deliveryMode').refreshDeliveryModeMenus(bot);
-  await refreshPreorderPost(bot);
-  await refreshHallServeOrdersMessage(bot, reservation.hallName);
+  await refreshPreorderPostAfterStockChange(bot, stockChanges);
+  await refreshHallServeOrdersMessage(bot, order.hallName);
   return true;
 }
 
@@ -716,4 +799,8 @@ module.exports = {
   buildOrdersKeyboard,
   buildOrderText,
   notifyAdminsOfNewOrder,
+  normalizePhoneNumber,
+  requestPhoneNumber,
+  handlePhoneNumberReply,
+  handleConfirmOrder,
 };

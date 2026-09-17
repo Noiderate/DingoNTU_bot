@@ -2,7 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { config, assertRequiredConfig } = require('./config');
 const { noteChatMessage, isMessageLatestInChat } = require('./services/chatTracker');
 const { isAdmin, ensureAdminIdsLoaded } = require('./services/googleSheets');
-const { handleAdminCommand, handleAdminCallback } = require('./handlers/admin');
+const { handleAdminCommand, handleAdminCallback, handleAdminDropoffPhoto } = require('./handlers/admin');
 const { handleUserCommand, handleUserCallback, handleUserPhoto, sendFallbackHint } = require('./handlers/user');
 const { isImageDocument } = require('./utils/telegramFiles');
 const { log } = require('./utils/logger');
@@ -80,8 +80,13 @@ function instrumentSendMethods(botInstance) {
 async function dispatchMessage(botInstance, msg, deferred) {
   await noteChatMessageIfAdmin(msg);
 
-  // Photos and image documents are payment receipts.
+  // Photos and image documents are usually payment receipts, unless the
+  // sender is an admin currently relaying a drop-off photo to a customer.
   if (msg.photo || isImageDocument(msg.document)) {
+    if (await handleAdminDropoffPhoto(botInstance, msg)) {
+      return;
+    }
+
     const result = await handleUserPhoto(botInstance, msg);
 
     if (result) {

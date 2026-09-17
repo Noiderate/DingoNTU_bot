@@ -183,18 +183,127 @@ Every one of these must behave exactly as it did before the upgrade.
       order history — **not** a hall named `/orders`.
 - [ ] Non-admins get no admin functionality at all.
 
+### 7a. Sold-out announcements
+
+- [ ] Order the last unit of an item (or edit its stock to 0 via Manage
+      Food). The Dingo channel gets a new `🚫 {item} has been sold out!`
+      post, and the preorder post is **replaced** (old one deleted, new one
+      sent — check the message id actually changes, not just the text).
+- [ ] Edit an item's stock to any value **above** 0 (including from 0 back up
+      — a restock) — no "sold out" post, and the preorder post is edited in
+      place as before (not deleted/resent).
+- [ ] Place one order that empties **two different items** at once (e.g. the
+      last of both Chicken Rice and Iced Milo) — two separate "sold out"
+      posts, one per item, but only **one** fresh preorder post.
+- [ ] Run "Edit All Stock" across several items, zeroing two of them partway
+      through — both sold-out posts (and the single repost) should appear
+      only once the whole session finishes, not immediately after each item
+      (see MAINTENANCE.md limitation #18 — this is intentional, not a bug).
+- [ ] An item already at 0 stock, edited to some other non-zero value then
+      back to 0 in the same action, is **not** re-announced unless it
+      actually starts the batch above 0 — confirms the check is "crossed
+      from >0 to 0", not just "ended at 0".
+
 ## 8. Delivery mode
 
 - [ ] The sequencer advances preorder → coming → here → get-ready (next hall).
 - [ ] Out-of-order buttons are refused as outdated.
 - [ ] Superseded channel posts are deleted.
-- [ ] Blocking a hall removes it from `/start` and updates the preorder post.
-- [ ] Revert restores the last blocked hall.
-- [ ] Reset Halls reopens everything.
+- [ ] Only `preorder` and `we are here` show a post button. `get ready` and
+      `coming` show no button - the menu instead shows a waiting line
+      ("Auto-posting ... once 2/3 of {hall} is served (x/y so far)").
+- [ ] Mark orders served for the current hall one at a time. At **2/3 served**,
+      `Get ready, {next hall}` posts itself and everyone with an active order at
+      the next hall gets a "start heading down" DM.
+- [ ] Mark the **last** remaining order served. `{next hall}, we are coming`
+      posts itself, the next hall's customers get a "come down now" DM, **and**
+      the next hall disappears from `/start` and the preorder post — all in the
+      same step.
+- [ ] A customer with an **open cart but no confirmed order** for the
+      just-closed hall gets a "ordering just closed, cart cleared" DM and their
+      cart is gone. A customer **mid-payment** (already confirmed, screenshot
+      pending) for that same hall is completely undisturbed.
+- [ ] A hall with **zero orders** this round: posting `we are here` for the
+      hall before it immediately cascades straight through that hall's
+      get-ready and coming posts (nothing to wait for).
+- [ ] The **last hall** in the list never re-triggers get-ready/coming for the
+      first hall, even after all its orders are marked served. `Finish
+      Delivery` is the manual end-of-night step instead.
+- [ ] `Revert last blocked hall` and `Reset Halls` still work as manual
+      overrides.
 - [ ] The preorder post updates **immediately** after an order is confirmed, a
-      stock edit through the admin menu, and a hall block.
+      stock edit through the admin menu, and an automatic hall closure.
 - [ ] Editing stock **directly in the spreadsheet** updates the post within
       about a minute (this is the one intentional delay).
+
+### 8a. Hall serve list (grouped by phone number)
+
+- [ ] `we are here` lists **one row per customer**, not per order — a customer
+      with two orders for the hall shows once.
+- [ ] Each row shows the phone number followed by what they ordered, not a
+      Telegram handle. Rows are sorted by phone number; anyone with no phone
+      on file (an order from before this feature) sorts last, under their
+      handle.
+- [ ] Tapping a phone number opens a submenu: handle, phone, every order they
+      have here, and **✅ Served** / **📦 Dropped off** per order, plus
+      **⬅️ Back**.
+- [ ] **Served** and **Dropped off** send visibly different confirmation text
+      to the customer, and show up as different reasons in
+      `order_status_history` (`select * from order_status_history where
+      order_id = '<id>'`) — both still leave `orders.status = 'served'`.
+- [ ] Tapping Served/Dropped off with other orders left for that customer
+      returns to their submenu (now missing that order). Tapping it on their
+      last order returns to the phone-number list (now missing them).
+- [ ] **Speed**: on your test bot, time from tapping a phone number to the
+      submenu rendering, and from tapping Served/Dropped off to the list
+      updating. This wasn't verified against a live bot while building it —
+      if it feels slow, check whether `bot_state` has a row for
+      `delivery:serve_cache:<hall>` (§3.2) — if not, every tap is hitting
+      Supabase directly instead of the cache.
+- [ ] A **new order** placed for the hall after `we are here` was posted shows
+      up in the list on next refresh (§ existing behaviour, now grouped).
+
+### 8b. Phone number collection
+
+- [ ] A customer's **first-ever** Confirm Order tap: instead of the order
+      going through, the bot asks for a phone number and the cart is
+      untouched. Nothing is charged or deducted yet.
+- [ ] Replying with a number (e.g. `9123 4567`) saves it and asks them to tap
+      Confirm Order again; tapping it now completes the order normally.
+- [ ] Replying with garbage (e.g. `idk`) is rejected with a re-prompt, and
+      doesn't touch the customer record.
+- [ ] Typing `/start` while being asked for a phone number is treated as the
+      command, not as a (garbage) phone number attempt.
+- [ ] An **existing** customer from before this shipped (no `phone_number` on
+      file) hits the same gate on their next order.
+- [ ] A customer who already has a phone number on file is never asked again.
+
+### 8c. Drop Remaining Items Off
+
+- [ ] With several customers still uncollected at a hall, tap **📦 Drop
+      Remaining Items Off** at the bottom of the list. The text shows a
+      collated total per item (e.g. `Mala x10`, not per order), and below it
+      one `phone | handle` button per customer still uncollected.
+- [ ] Tap a customer. The bot sends **you** (the admin) a message in your own
+      chat with it, listing that customer's order, asking for a photo.
+- [ ] Send a photo. It should appear in the **customer's** chat with a
+      caption, not stay visible in your own chat with the bot (check it gets
+      deleted from your side within a moment).
+- [ ] Check `order_status_history` for that order — reason should be
+      `Dropped off`, status `served`, same as the manual Dropped off button.
+- [ ] If that customer had **two orders** at the hall, one photo should mark
+      **both** — check both show up in the confirmation message and both
+      transition in the database.
+- [ ] Send a **text message** instead of a photo while a relay is pending —
+      it should be ignored by this flow (falls through to whatever else would
+      normally handle it), and the relay should still be waiting afterwards.
+- [ ] Tap "Drop Remaining Items Off" for a customer, then **before** sending a
+      photo, tap it again for a *different* customer, then send a photo — it
+      should go to the second customer (known limitation #17 in
+      MAINTENANCE.md; confirms the behaviour matches what's documented rather
+      than silently sending to the wrong person without a trace).
+- [ ] After the relay, the hall's phone-number list updates (that customer
+      drops off it if that was their last order).
 
 ## 9. `/orders`
 

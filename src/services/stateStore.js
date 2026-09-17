@@ -14,6 +14,20 @@ const { config } = require('../config');
 const KEYS = {
   // Admin multi-step input, e.g. "waiting for a Telegram ID". Per admin.
   adminInputState: userId => `admin:input:${userId}`,
+  // Set while a customer has been asked for a phone number before their
+  // order can be confirmed (their first order, or any customer from before
+  // this was collected). The next plain-text message from them is read as
+  // their reply rather than falling through to the fallback hint.
+  awaitingPhoneNumber: userId => `user:awaiting_phone:${userId}`,
+  // Set while an admin has been asked for a drop-off photo for one customer's
+  // remaining order(s) at a hall. The next photo/image document they send is
+  // relayed to that customer instead of being treated as a payment receipt.
+  awaitingDropoffPhoto: adminUserId => `admin:dropoff_photo:${adminUserId}`,
+  // Snapshot of a hall's active orders, refreshed whenever "we are here"'s
+  // list is (re)built. Read when a customer submenu opens, so that tap
+  // doesn't need its own Supabase round trip - see admin.js's serve-list
+  // functions.
+  hallServeOrdersCache: hallName => `delivery:serve_cache:${hallName}`,
   // Message id of the self-editing admin menu, so it can be kept at the bottom.
   adminMenuMessage: userId => `admin:menu_msg:${userId}`,
   // Which admins currently have the delivery-mode menu open, for live refresh.

@@ -53,7 +53,7 @@ the receipts automatically, and coordinates a delivery round across dorm halls.
 | Data | Source of truth | Where |
 |---|---|---|
 | Orders, order items, status history | **Supabase** | `orders`, `order_items`, `order_status_history` |
-| Customers | **Supabase** | `customers` |
+| Customers, incl. phone number | **Supabase** | `customers` (`phone_number`, collected at first Confirm Order) |
 | Payment receipts and verdicts | **Supabase** | `payment_submissions` + `payment-receipts` bucket |
 | Carts | **Supabase** | `carts` |
 | Hall blocking | **Supabase** | `halls_state` |
@@ -247,6 +247,34 @@ delete from bot_state where key like 'delivery:%';
 
 Then have an admin reopen Delivery Mode and post the preorder message again.
 
+**Get ready / coming isn't posting for the next hall.** These two posts are
+automatic now (see `src/handlers/admin.js`: `autoAdvanceDeliveryStage`,
+`postDingoUpdate`), fired off the *current* hall's serve progress - not a
+button, so there is nothing to tap if it's stuck. Check:
+
+```sql
+-- Serve progress for the current hall tonight (service day starts
+-- SERVICE_DAY_START_HOUR, default 3pm - see src/services/todaySheet.js)
+select status, count(*) from orders
+where hall_name_snapshot = '<hall>'
+  and created_at >= <service day start, UTC>
+  and status in ('awaiting_payment','verifying_payment','payment_flagged','paid','served')
+group by status;
+```
+
+- get-ready needs 2/3 served; coming needs all of them served.
+- An order stuck in `payment_flagged` or `verifying_payment` that will never
+  get marked served (e.g. the customer vanished) holds the hall below
+  threshold forever. Resolve it the normal way - reject it, or serve it
+  anyway if the food went out (`markOrderServed` allows serving unpaid, see
+  §9) - either way it stops blocking the count: a rejected order drops out of
+  the denominator entirely, a served one adds to the numerator.
+- There is currently **no manual override button** to force-post get-ready or
+  coming ahead of the threshold - that was removed along with manual hall
+  blocking. If staff genuinely need to skip ahead (e.g. leaving early), the
+  fastest fix is clearing the remaining orders' status as above so the real
+  threshold is met, not editing state directly.
+
 **An admin is stuck mid-prompt** (every message becomes a hall name):
 
 ```sql
@@ -255,6 +283,41 @@ delete from bot_state where key = 'admin:input:<telegram_id>';
 
 Typing any `/command` also clears them out, since commands take precedence over
 pending prompts.
+
+**A customer is stuck being asked for a phone number** (every message they
+send gets read as a phone number attempt, e.g. because they typed something
+odd and now can't get past it):
+
+```sql
+delete from bot_state where key = 'user:awaiting_phone:<telegram_id>';
+```
+
+Typing any `/command` (e.g. `/start`) also clears this, same as the admin
+prompt above.
+
+**An admin is stuck mid drop-off-photo relay** (every photo they send to the
+bot gets forwarded to whichever customer they last tapped "Drop Remaining
+Items Off" for, instead of doing anything else):
+
+```sql
+delete from bot_state where key = 'admin:dropoff_photo:<telegram_id>';
+```
+
+This state also expires on its own after 15 minutes.
+
+**The "we are here" hall list looks stale** (a customer's order doesn't show,
+or shows as still active after being served/dropped off elsewhere). It reads
+from a 20-minute cache, refreshed on every relevant change:
+
+```sql
+select * from bot_state where key = 'delivery:serve_cache:<hall name>';
+```
+
+Delete the row to force the next tap to re-query Supabase directly:
+
+```sql
+delete from bot_state where key = 'delivery:serve_cache:<hall name>';
+```
 
 ### 3.3 Row-number-as-ID in `FoodAndStock` and `Hall`
 
@@ -823,9 +886,140 @@ An honest list.
     physically hand food over and should not be blocked — but it means an unpaid
     order can reach `served`. The payment state stays visible in the sheet.
 
+12. **No manual override for get-ready/coming.** Automating them (§3.2) removed
+    the buttons entirely — there is no admin-facing way to force-post ahead of
+    the 2/3/100% threshold, only to fix the underlying order data so the real
+    threshold is met. Acceptable for now; revisit if staff hit this in practice.
+
+13. **"2/3 served" counts orders, not individual food items.** An order with
+    five items and an order with one both count as one unit of progress. If a
+    hall's orders vary wildly in size this could feel off; nobody has reported
+    it as a problem yet.
+
+14. **No way to change a phone number once given.** `customers.phone_number` is
+    set once, at the first Confirm Order that hits the gate, and there is no
+    command to update it. A wrong number has to be fixed directly in Supabase:
+    `update customers set phone_number = '...' where telegram_user_id = <id>;`
+
+15. **Phone number validation is deliberately loose** (7-15 digits, whatever
+    formatting stripped away - see `normalizePhoneNumber` in
+    `src/handlers/user.js`). It will accept a number that is not actually
+    reachable (transposed digits, a landline, etc); there is no verification
+    step (no SMS OTP or similar).
+
+16. **The drop-off photo relay exists because Telegram gives a bot no other
+    option.** There is no way for a bot (or a `t.me/...` link) to open a real
+    chat with someone else's account and pre-fill the message box - that
+    capability simply doesn't exist in the Bot API or in Telegram's deep
+    links. The admin sends the photo to the *bot*, which forwards it to the
+    customer; see `handleAdminDropoffPhoto` in `src/handlers/admin.js`. If
+    Telegram ever adds a real mechanism for this, it would remove a hop, but
+    don't assume one exists without checking current docs.
+
+17. **One photo relay in flight per admin.** `admin:dropoff_photo:<id>` holds
+    at most one pending relay per admin telegram id - if an admin taps "Drop
+    Remaining Items Off" for a second customer before sending a photo for the
+    first, the second tap silently overwrites the first (the photo they then
+    send goes to whoever they tapped last). Not a data-loss risk (nothing
+    was marked yet), just a possible "sent it to the wrong person" mixup if
+    an admin juggles two at once. Acceptable for now given they're normally
+    done one at a time, standing at a hall.
+
+18. **"Edit All Stock" batches its sold-out announcements to the end of the
+    session, not real-time per item.** If an admin edits five items in one
+    "Edit All Stock" run and two of them hit 0 partway through, both
+    announcements (and the single repost) fire only once the whole session
+    finishes - not the moment each one crosses to zero. A single-item stock
+    edit announces immediately, since there's only one change in that flow.
+    Deliberate (see the change log below), not a bug.
+
+19. **No "back in stock" announcement.** Restocking an item - an admin
+    raising its stock, or an order being rejected/expired restoring it - never
+    posts anything, even if it was previously announced as sold out. Only
+    the crossing *to* zero is covered. A natural symmetric addition if it's
+    ever asked for.
+
 ---
 
 ## 10. Change log
+
+**2026-09-18 — Sold-out announcements**
+
+- Any stock change that takes an item from having stock to having none now
+  posts `🚫 {item} has been sold out!` to the Dingo channel (one message per
+  item, even if several sell out in the same action) and replaces the live
+  preorder post with a **fresh** one instead of the normal silent
+  edit-in-place refresh - a plain edit doesn't notify channel subscribers.
+  Covers checkout deductions, a single admin stock edit, and a whole "Edit
+  All Stock" session (batched to the end of that session - see limitation
+  #18). See `findNewlySoldOutItems` / `announceSoldOut` /
+  `repostPreorderAvailability` / `refreshPreorderPostAfterStockChange` in
+  `src/handlers/admin.js`.
+- `handleConfirmOrder` in `src/handlers/user.js` now returns
+  `{ order, stockChanges }` from its lock instead of just the order, so the
+  caller (outside the lock) can decide silent-refresh vs. sold-out-repost.
+  Nothing about the checkout flow itself changed.
+- No schema changes.
+
+**2026-09-17 — "Drop Remaining Items Off": collated totals + photo relay for no-shows**
+
+- New button at the bottom of the hall phone-number list. Shows a collated
+  per-item total of everything still uncollected (`collateRemainingItems`),
+  then a `phone | handle` button per customer below it.
+- Tapping a customer starts a photo relay (`admin:dropoff_photo:<id>` in
+  `bot_state`, 15 min TTL): the admin's next photo is forwarded to the
+  customer with a caption, then deleted from the admin's own chat, and every
+  order it covers is marked `dropped_off` (same mechanism as the existing
+  Served/Dropped off buttons - same customer notification path, same
+  `order_status_history` reason, one photo covers all of a customer's
+  remaining orders at that hall).
+- Chosen over a direct `t.me/<username>` link because Telegram has no
+  mechanism for a bot (or any link) to pre-fill someone else's chat, and a
+  link-based approach would also silently fail for any customer without a
+  public username. See limitation #16.
+- Cache-sync fix: rejecting a payment and the expiry sweeper now also refresh
+  a hall's cached serve list (they didn't before), closing the one real gap
+  where the list could show an order that had actually been resolved
+  elsewhere. The cache was never able to affect the underlying order data or
+  the Served/Dropped off action itself - see the "Delivery mode" section of
+  the README for why.
+- No schema changes.
+
+**2026-09-17 — Phone number collection, phone-grouped hall serve list**
+
+- Customers give a phone number the first time they confirm an order
+  (`customers.phone_number`, migration `0006_customer_phone_number.sql`);
+  mandatory — Confirm Order is gated on it, see
+  `handleConfirmOrder`/`requestPhoneNumber` in `src/handlers/user.js`.
+- The "we are here" serve list groups by customer instead of one row per
+  order, sorted by phone number, and shows phone + items on the button
+  instead of a Telegram handle (`buildHallCustomerListKeyboard` in
+  `src/handlers/admin.js`).
+- Tapping a customer opens a submenu (their orders, handle, phone) with
+  **Served** and **Dropped off** as distinct actions per order — different
+  customer message and `order_status_history` reason for each, same
+  underlying `served` status — plus **Back**.
+- The order list behind the hall view is cached in `bot_state`
+  (`delivery:serve_cache:<hall>`, ~20 min TTL) and refreshed on every relevant
+  change, so opening a submenu costs no extra Supabase query in the common
+  case.
+- Schema change: `customers.phone_number` (nullable text). No other tables
+  changed; `orders.status` still only ever reaches `served`, never a separate
+  "dropped off" state.
+
+**2026-09-17 — Automatic get-ready/coming, hall auto-closure**
+
+- Manual "Block Hall" removed. `get ready` and `coming` now post themselves off
+  hall serve progress (`orderStore.getHallServeProgress`, `src/handlers/admin.js`:
+  `autoAdvanceDeliveryStage`), and a hall is closed to new orders the moment its
+  `coming` post fires — no longer only once fully served.
+- Customers with an open cart but no confirmed order for a just-closed hall are
+  proactively notified and cleared out; anyone already mid-payment is untouched.
+- Get-ready and coming now also DM every customer with an active order at that
+  hall ("start heading down" / "come down now").
+- `we are here` remains the only manual channel post. `Revert last blocked hall`
+  and `Reset Halls` remain as manual overrides.
+- No schema changes.
 
 **2026-09-16 — Supabase, AI payment verification, Vercel**
 

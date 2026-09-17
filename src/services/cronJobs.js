@@ -4,7 +4,7 @@ const { getSupabase, unwrap } = require('./supabase');
 const { processQueue } = require('./paymentVerifier');
 const { drainOutbox, reconcile } = require('./sheetMirror');
 const { refreshTodaySheet } = require('./todaySheet');
-const { refreshPreorderPost } = require('../handlers/admin');
+const { refreshPreorderPost, refreshHallServeOrdersMessage } = require('../handlers/admin');
 const { refreshDeliveryModeMenus } = require('../handlers/deliveryMode');
 const { ensureAdminIdsLoaded } = require('./googleSheets');
 const repo = require('./orderRepository');
@@ -105,6 +105,9 @@ async function runSweep() {
       const expired = await orderActions.expireOrder(bot, orderStore.toOrder(row));
       if (expired) {
         results.expired += 1;
+        // The order was awaiting_payment (active), so it may be sitting in a
+        // hall's cached "we are here" list - drop it now.
+        await refreshHallServeOrdersMessage(bot, expired.hallName).catch(() => {});
       }
     }
   }

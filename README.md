@@ -59,13 +59,20 @@ screenshots are read automatically and either approved or sent to an admin.
 1. `/start` (or the channel's deep link) lists halls that are still open.
 2. Picking a hall shows the menu, built live from `FoodAndStock`.
 3. Tapping items builds a cart stored in Postgres.
-4. **Confirm Order** re-checks stock, deducts it, creates the order directly in
-   `awaiting_payment`, and immediately sends payment instructions.
-5. The customer gets the PayNow instructions, the exact
+4. **Confirm Order** first checks the customer has a phone number on file
+   (`customers.phone_number` - their first order, or any order predating this
+   column). If not, the bot asks for one, saves it, and the customer taps
+   Confirm Order again; nothing is charged or deducted until then. See
+   `handleConfirmOrder`/`requestPhoneNumber` in
+   [`src/handlers/user.js`](src/handlers/user.js).
+5. Once a phone number is on file, Confirm Order re-checks stock, deducts it,
+   creates the order directly in `awaiting_payment`, and immediately sends
+   payment instructions.
+6. The customer gets the PayNow instructions, the exact
    amount due, and a payment deadline.
-6. They reply with a screenshot. The bot answers immediately, verifies in the
+7. They reply with a screenshot. The bot answers immediately, verifies in the
    background, and either confirms the payment or tells them an admin will look.
-7. `/orders` shows their own order history, paginated.
+8. `/orders` shows their own order history, paginated.
 
 ### Admin console
 
@@ -83,13 +90,75 @@ The legacy order Confirm/Reject code is preserved but bypassed for new orders.
 ### Delivery mode
 
 Walks each hall through `preorder → coming → here`, then `get ready` for the next
-hall, posting to `DINGO_CHANNEL_ID` and deleting superseded posts. Blocking a hall
-closes ordering for it. **Finish Delivery** clears the channel posts and resets
-the sequencer.
+hall, posting to `DINGO_CHANNEL_ID` and deleting superseded posts.
+
+**Only `we are here` is a manual tap.** `get ready` and `coming` post themselves,
+driven by how far the *current* hall has gotten through its "tap each order when
+served" list (see [`src/services/orderStore.js`](src/services/orderStore.js)'s
+`getHallServeProgress`, scoped to the current service day - see
+[`getServiceDayWindow`](src/services/todaySheet.js)):
+
+- **2/3 served** → posts `Get ready, {next hall}` and DMs every customer with an
+  active order there to start heading down.
+- **Fully served** → posts `{next hall}, we are coming`, DMs those customers to
+  come down and collect now, **and closes ordering for that hall** in the same
+  step (see `blockHallForAutoClosure` in
+  [`src/handlers/admin.js`](src/handlers/admin.js)).
+
+Closing a hall never touches a customer already mid-payment - only carts that
+were never confirmed into an order get cleared, with a message explaining why.
+The very last hall in the list never triggers this (there's no genuine "next
+hall" for it); the admin ends the night with **Finish Delivery** instead, which
+clears the channel posts and resets the sequencer.
+
+`Revert last blocked hall` and `Reset Halls` remain as manual overrides if the
+automatic closure needs undoing.
 
 The live preorder post re-renders whenever something changes it through the bot,
 and once a minute from the scheduler to catch edits typed straight into the
-spreadsheet.
+spreadsheet. **Except when an item sells out.** Every stock-changing action - a
+checkout deduction, an admin editing one item's stock, or a whole "Edit All
+Stock" session - reports its before/after values to
+`refreshPreorderPostAfterStockChange` in
+[`src/handlers/admin.js`](src/handlers/admin.js). An item that just crossed
+from having stock to having none gets a dedicated `🚫 {item} has been sold
+out!` post in the channel (one per item, even if several sold out in the same
+batch), followed by a **fresh** preorder post replacing the old one - a plain
+edit doesn't notify channel subscribers, and that's the point of doing this
+differently. Every other stock change still gets the normal silent
+edit-in-place refresh.
+
+**The "we are here" serve list is grouped by customer, phone number first**
+(not one row per order, and not a Telegram handle - see
+[`src/handlers/admin.js`](src/handlers/admin.js)'s `buildHallCustomerListKeyboard`).
+Each button shows the phone number and what that customer ordered; tapping it
+opens a submenu with the handle, every order they still have active at that
+hall, and **✅ Served** / **📦 Dropped off** for each one (distinct outcomes -
+different customer message, different `order_status_history` reason, same
+underlying `served` status) plus **⬅️ Back**. The order list behind this is
+cached for ~20 minutes (`stateStore.KEYS.hallServeOrdersCache`) and refreshed
+on every change, so opening a customer's submenu costs no extra Supabase
+round trip in the common case. **The cache never guards the action itself** -
+Served/Dropped off always re-checks the order live before transitioning it,
+so a stale display can at worst show an already-resolved order (tapping it
+just fails harmlessly), never cause a lost update or a double-serve. Every
+code path that can remove an order from a hall's list (reject, payment
+reject, expiry, as well as serving it) proactively refreshes that hall's
+cache, on top of the TTL as a backstop.
+
+**📦 Drop Remaining Items Off**, at the bottom of the phone-number list, is for
+customers who never came down. It shows a collated per-item total of
+everything still uncollected ("Mala x10, Chicken x5 …", see
+`collateRemainingItems`) so staff know how much food to leave at the
+collection point, then a `phone | handle` button per customer below it.
+Tapping one starts a photo relay: the bot asks the admin (in the admin's own
+chat with the bot) to send a photo of where the food was left, listing that
+customer's order as a reminder. The admin's very next photo is forwarded to
+the customer with a caption, then deleted from the admin's own chat so a
+night's drop-offs don't pile up there, and every order it covers is marked
+`dropped_off` automatically (all of a customer's remaining orders at once, on
+one photo). See `handleServeDropoffStart` / `handleAdminDropoffPhoto` in
+[`src/handlers/admin.js`](src/handlers/admin.js).
 
 ### Payment verification
 

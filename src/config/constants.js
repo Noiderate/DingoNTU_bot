@@ -43,7 +43,14 @@ const CALLBACKS = {
   SETTINGS_DELIVERY_MODE: 'settings_delivery_mode',
   DELIVERY_MODE_BACK: 'delivery_mode_back',
   DELIVERY_MODE_POST_CHANNEL_PREFIX: 'delivery_mode_post_channel_',
-  DELIVERY_MODE_SERVE_ORDER_PREFIX: 'delivery_mode_serve_order_',
+  // Hall serve list: kept short, since a 64-byte callback_data budget has to
+  // fit an order's UUID too (see admin.js's serve-list functions).
+  DELIVERY_MODE_SERVE_CUSTOMER_PREFIX: 'dmsc_',   // {hallName}|{telegramUserId} -> open their submenu
+  DELIVERY_MODE_SERVE_MARK_SERVED_PREFIX: 'dmss_', // {orderId} -> mark served
+  DELIVERY_MODE_SERVE_MARK_DROPPED_PREFIX: 'dmsd_', // {orderId} -> mark dropped off
+  DELIVERY_MODE_SERVE_BACK_PREFIX: 'dmsb_',       // {hallName} -> back to the phone-number list
+  DELIVERY_MODE_SERVE_REMAINING_PREFIX: 'dmsr_',  // {hallName} -> collated remaining items + customer list
+  DELIVERY_MODE_SERVE_DROPOFF_PREFIX: 'dmsp_',    // {hallName}|{telegramUserId} -> start the drop-off photo relay
   DELIVERY_MODE_REVERT_BLOCK: 'delivery_mode_revert_block',
   DELIVERY_MODE_FINISH: 'delivery_mode_finish',
   DELIVERY_MODE_RESET_HALLS: 'delivery_mode_reset_halls',

@@ -1,9 +1,10 @@
+const googleSheets = require('../services/googleSheets');
 const {
   isAdmin, getAdminIds, reloadAdminIds, addAdmin, deleteAdmin,
   getFoodItems, addFoodItem, deleteFoodItem, updateFoodItemStock,
   getHalls, addHall, deleteHall,
   getPreorderAdminTag, getAdminUsernameById, writeToSheet,
-} = require('../services/googleSheets');
+} = googleSheets;
 const { CALLBACKS, STATES, isCallbackType, extractCallbackValue } = require('../config/constants');
 const keyboards = require('../utils/keyboards');
 const menuTexts = require('../utils/menuTexts');
@@ -18,6 +19,7 @@ const paynowQr = require('../services/paynowQr');
 const { getMenuMessageId, setMenuMessageId, clearMenuMessageId } = require('../services/chatTracker');
 const { config } = require('../config');
 const { formatCents } = require('../utils/money');
+const { isImageDocument } = require('../utils/telegramFiles');
 const { log } = require('../utils/logger');
 const {
   advanceNextHallToPost,
@@ -78,17 +80,188 @@ function escapeHtml(text) {
     .replace(/'/g, '&#39;');
 }
 
-function formatOrderServeButtonText(order) {
-  return `${order.code} - ${orderActions.describeCustomer(order)} - ${formatCents(order.totalCents)}`;
+// --- Hall serve list: grouped by customer, phone number first --------------
+//
+// Tapping "we are here" used to list one button per order, labelled with the
+// Telegram handle. Staff at the hall need a phone number, not a handle, and
+// a customer with two orders should be one entry, not two - so the list now
+// groups by customer, and drills into a per-order Served/Dropped off
+// submenu on tap.
+
+const SERVE_TEXT_MAX_LENGTH = 60;
+
+function truncate(text, max = SERVE_TEXT_MAX_LENGTH) {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-function buildHallServeOrdersKeyboard(orders) {
+function formatOrderItems(order) {
+  return (order.items || []).map(item => `${item.name} x${item.quantity}`).join(', ');
+}
+
+/**
+ * One entry per customer, each carrying every order they still have active
+ * at this hall. Order of entries is not meaningful here - see
+ * sortCustomerGroups for the phone-number ordering shown to staff.
+ */
+function groupOrdersByCustomer(orders) {
+  const groups = new Map();
+
+  for (const order of orders) {
+    const key = order.userId;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        telegramUserId: key,
+        phone: order.phoneNumber || null,
+        handle: order.username ? `@${order.username}` : (order.userName || `User ${key}`),
+        orders: [],
+      });
+    }
+    groups.get(key).orders.push(order);
+  }
+
+  return [...groups.values()];
+}
+
+/**
+ * Phone number first (the whole point of this list), customers with no
+ * number on file (pre-dating this feature) pushed to the bottom under their
+ * handle instead.
+ */
+function sortCustomerGroups(groups) {
+  return [...groups].sort((a, b) => {
+    if (a.phone && b.phone) return a.phone.localeCompare(b.phone);
+    if (a.phone) return -1;
+    if (b.phone) return 1;
+    return (a.handle || '').localeCompare(b.handle || '');
+  });
+}
+
+function formatCustomerListButtonText(group) {
+  const label = group.phone || `${group.handle} (no phone on file)`;
+  const items = group.orders.map(formatOrderItems).join(' | ');
+  return truncate(`${label} — ${items}`);
+}
+
+/** {hallName}|{telegramUserId} - split on the LAST separator, since a hall
+ * name (admin-entered free text) could in principle contain the character
+ * itself, while a Telegram user id never does. */
+function encodeCustomerKey(hallName, telegramUserId) {
+  return `${hallName}|${telegramUserId}`;
+}
+
+function decodeCustomerKey(raw) {
+  const sep = raw.lastIndexOf('|');
+  return { hallName: raw.slice(0, sep), telegramUserId: Number(raw.slice(sep + 1)) };
+}
+
+function buildHallCustomerListKeyboard(hallName, orders) {
+  const groups = sortCustomerGroups(groupOrdersByCustomer(orders));
+
+  const buttons = groups.map(group => [{
+    text: formatCustomerListButtonText(group),
+    callback_data: `${CALLBACKS.DELIVERY_MODE_SERVE_CUSTOMER_PREFIX}${encodeCustomerKey(hallName, group.telegramUserId)}`,
+  }]);
+
+  buttons.push([{
+    text: '📦 Drop Remaining Items Off',
+    callback_data: `${CALLBACKS.DELIVERY_MODE_SERVE_REMAINING_PREFIX}${hallName}`,
+  }]);
+
+  return { inline_keyboard: buttons };
+}
+
+/**
+ * Total quantity per item across every order still uncollected at the hall -
+ * what staff need to know to leave the right amount of food behind. Sorted
+ * highest-quantity first, matching the Today's Orders sheet totals table.
+ */
+function collateRemainingItems(orders) {
+  const totals = new Map();
+
+  for (const order of orders) {
+    for (const item of order.items || []) {
+      totals.set(item.name, (totals.get(item.name) || 0) + item.quantity);
+    }
+  }
+
+  return [...totals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function buildRemainingItemsText(hallName, orders) {
+  const totals = collateRemainingItems(orders);
+  const lines = totals.length
+    ? totals.map(([name, qty]) => `• ${name} x${qty}`).join('\n')
+    : 'Nothing left to drop off.';
+
+  return `📦 Remaining items to drop off at ${hallName}:\n\n${lines}\n\n`
+    + `Tap a customer below once you've left their food, to send them a photo of where it is:`;
+}
+
+function buildRemainingItemsKeyboard(hallName, orders) {
+  const groups = sortCustomerGroups(groupOrdersByCustomer(orders));
+
+  const buttons = groups.map(group => [{
+    text: truncate(`${group.phone || 'No phone on file'} | ${group.handle}`),
+    callback_data: `${CALLBACKS.DELIVERY_MODE_SERVE_DROPOFF_PREFIX}${encodeCustomerKey(hallName, group.telegramUserId)}`,
+  }]);
+
+  buttons.push([{ text: '⬅️ Back', callback_data: `${CALLBACKS.DELIVERY_MODE_SERVE_BACK_PREFIX}${hallName}` }]);
+
+  return { inline_keyboard: buttons };
+}
+
+const HALL_SERVE_LIST_HEADER = hallLabel => `✅ ${hallLabel}, we are here\n\nTap a phone number to see their order:`;
+
+function buildCustomerSubmenuText(group) {
+  const lines = group.orders.map(order => (
+    `🧾 ${order.code} — ${formatOrderItems(order)} — ${formatCents(order.totalCents)}`
+  ));
+
+  return `👤 ${group.handle}\n📱 ${group.phone || 'No phone on file'}\n\n${lines.join('\n')}`;
+}
+
+function buildCustomerSubmenuKeyboard(hallName, group) {
+  const multiple = group.orders.length > 1;
+
+  const orderRows = group.orders.map(order => [
+    {
+      text: multiple ? `✅ Served (${order.code})` : '✅ Served',
+      callback_data: `${CALLBACKS.DELIVERY_MODE_SERVE_MARK_SERVED_PREFIX}${order.id}`,
+    },
+    {
+      text: multiple ? `📦 Dropped off (${order.code})` : '📦 Dropped off',
+      callback_data: `${CALLBACKS.DELIVERY_MODE_SERVE_MARK_DROPPED_PREFIX}${order.id}`,
+    },
+  ]);
+
   return {
-    inline_keyboard: orders.map(order => [{
-      text: formatOrderServeButtonText(order),
-      callback_data: `${CALLBACKS.DELIVERY_MODE_SERVE_ORDER_PREFIX}${order.id}`,
-    }]),
+    inline_keyboard: [
+      ...orderRows,
+      [{ text: '⬅️ Back', callback_data: `${CALLBACKS.DELIVERY_MODE_SERVE_BACK_PREFIX}${hallName}` }],
+    ],
   };
+}
+
+/**
+ * A hall's active orders, read from a short-lived cache written whenever the
+ * list is (re)built rather than re-queried on every tap - the whole point is
+ * that opening a customer's submenu costs zero extra Supabase round trips in
+ * the common case. Falls back to a fresh query if the cache missed (e.g. it
+ * expired, or nothing has written it yet).
+ */
+async function loadHallServeOrders(hallName) {
+  const cached = await stateStore.get(stateStore.KEYS.hallServeOrdersCache(hallName), null);
+  if (cached) {
+    return cached;
+  }
+
+  return refreshHallServeOrdersCache(hallName);
+}
+
+async function refreshHallServeOrdersCache(hallName) {
+  const orders = await orderStore.getActiveOrdersByHall(hallName);
+  await stateStore.set(stateStore.KEYS.hallServeOrdersCache(hallName), orders, { ttlMs: 20 * 60 * 1000 });
+  return orders;
 }
 
 async function getBotStartUrl(bot) {
@@ -161,7 +334,7 @@ async function refreshPreorderPost(bot) {
     return { skipped: 'no_post' };
   }
 
-  const halls = await getHalls();
+  const halls = await googleSheets.getHalls();
   const blocked = await orderStore.loadBlockedHalls();
   const nextHall = halls.find(hall => !blocked.isBlocked(hall.name));
 
@@ -169,8 +342,8 @@ async function refreshPreorderPost(bot) {
     return { skipped: 'no_unblocked_hall' };
   }
 
-  const adminId = await getPreorderAdminTag();
-  const adminUsername = adminId ? await getAdminUsernameById(bot, adminId) : null;
+  const adminId = await googleSheets.getPreorderAdminTag();
+  const adminUsername = adminId ? await googleSheets.getAdminUsernameById(bot, adminId) : null;
   const text = await buildPreorderMessageText(nextHall.shortName || nextHall.name, adminUsername);
   const startUrl = await getBotStartUrl(bot);
 
@@ -202,6 +375,109 @@ async function refreshPreorderPost(bot) {
     await stateStore.set(stateStore.KEYS.preorderPost(), { ...post, contentHash });
     return { skipped: 'not_modified' };
   }
+}
+
+
+// --- Sold-out announcements ---------------------------------------------------
+//
+// Every stock-changing action (a checkout deduction, an admin editing one
+// item, an admin's "Edit All Stock" session) reports its before/after values
+// here. Most changes just get the normal silent edit-in-place refresh above;
+// one that newly crosses an item from having stock to having none instead
+// gets a "sold out" post per item and a fresh preorder post - a plain edit
+// does not notify channel subscribers, and that is the whole point of
+// treating this case differently.
+
+/**
+ * Which of a batch of stock changes newly crossed from having stock to
+ * having none. Pure, so the "just sold out" rule is unit-testable without a
+ * bot or a channel - an item that was already at 0 before this batch is not
+ * reported again.
+ */
+function findNewlySoldOutItems(changes) {
+  return (changes || []).filter(change => (change.oldStock || 0) > 0 && (change.newStock || 0) <= 0);
+}
+
+/** One "sold out" post per item, best-effort - a failed send must not stop the rest. */
+async function announceSoldOut(bot, soldOutItems) {
+  const channelId = config.telegram.dingoChannelId;
+
+  if (!channelId) {
+    return;
+  }
+
+  for (const item of soldOutItems) {
+    try {
+      await bot.sendMessage(channelId, `🚫 ${item.name} has been sold out!`);
+    } catch (error) {
+      log('warn', 'sold_out_announce_failed', { item: item.name, error: error.message });
+    }
+  }
+}
+
+/**
+ * Delete the live preorder post and send a fresh one, instead of editing it
+ * in place like refreshPreorderPost does - used only for the sold-out
+ * moment, so it actually notifies channel subscribers. A no-op if there is
+ * no live preorder post to replace.
+ */
+async function repostPreorderAvailability(bot) {
+  const post = await getPreorderPost();
+
+  if (!post.channelId || !post.msgId) {
+    return;
+  }
+
+  const halls = await googleSheets.getHalls();
+  const blocked = await orderStore.loadBlockedHalls();
+  const nextHall = halls.find(hall => !blocked.isBlocked(hall.name));
+
+  if (!nextHall) {
+    return;
+  }
+
+  const adminId = await googleSheets.getPreorderAdminTag();
+  const adminUsername = adminId ? await googleSheets.getAdminUsernameById(bot, adminId) : null;
+  const text = await buildPreorderMessageText(nextHall.shortName || nextHall.name, adminUsername);
+  const startUrl = await getBotStartUrl(bot);
+  const button = buildPreorderStartButton(startUrl);
+
+  let sent;
+  try {
+    sent = await bot.sendMessage(post.channelId, text, {
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      ...(button ? { reply_markup: button } : {}),
+    });
+  } catch (error) {
+    log('error', 'preorder_repost_failed', { error: error.message });
+    return;
+  }
+
+  try {
+    await bot.deleteMessage(post.channelId, post.msgId);
+  } catch (error) {
+    log('warn', 'preorder_repost_delete_failed', { error: error.message });
+  }
+
+  await recordPreorderPost(post.channelId, sent.message_id);
+}
+
+/**
+ * The single place every stock-changing call site refreshes the preorder
+ * post from, in place of a plain refreshPreorderPost(bot) call. Routes to
+ * the ordinary silent edit unless this batch just sold something out.
+ */
+async function refreshPreorderPostAfterStockChange(bot, changes) {
+  const soldOut = findNewlySoldOutItems(changes);
+
+  if (!soldOut.length) {
+    await refreshPreorderPost(bot);
+    return;
+  }
+
+  await announceSoldOut(bot, soldOut);
+  await repostPreorderAvailability(bot);
 }
 
 
@@ -349,6 +625,8 @@ async function handleAdminStateInput(bot, chatId, userId, text, state) {
       return true;
     }
 
+    const beforeItem = (await getFoodItems()).find(item => item.id === state.foodItemId);
+
     const result = await updateFoodItemStock(state.foodItemId, newStock);
     await bot.sendMessage(chatId, result.message);
     await clearAdminState(userId);
@@ -360,7 +638,10 @@ async function handleAdminStateInput(bot, chatId, userId, text, state) {
       keyboards.manageFoodItemsKeyboard()
     );
 
-    await refreshPreorderPost(bot);
+    await refreshPreorderPostAfterStockChange(
+      bot,
+      beforeItem ? [{ name: beforeItem.name, oldStock: beforeItem.stock || 0, newStock }] : []
+    );
     await refreshDeliveryModeMenus(bot);
     return true;
   }
@@ -399,7 +680,15 @@ async function handleAdminStateInput(bot, chatId, userId, text, state) {
       keyboards.manageFoodItemsKeyboard()
     );
 
-    await refreshPreorderPost(bot);
+    // state.items is the snapshot from before this whole session started, so
+    // this compares against every item's true starting stock, not just the
+    // one edited last.
+    const changes = state.items.map(original => {
+      const updated = updatedItems.find(item => item.id === original.id);
+      return { name: original.name, oldStock: original.stock || 0, newStock: updated ? (updated.stock || 0) : 0 };
+    });
+
+    await refreshPreorderPostAfterStockChange(bot, changes);
     await refreshDeliveryModeMenus(bot);
     return true;
   }
@@ -925,6 +1214,10 @@ async function handlePaymentReject(bot, query, chatId, userId, messageId, data) 
       `\n\n❌ Payment rejected by admin ${userId}\n↩️ Stock restored`
     );
     await refreshDeliveryModeMenus(bot);
+    // The order was in the active set (payment_flagged/awaiting/verifying),
+    // so it may be sitting in a hall's cached "we are here" list - drop it
+    // now rather than waiting for the next unrelated order at that hall.
+    await refreshHallServeOrdersMessage(bot, order.hallName);
 
     await bot.answerCallbackQuery(query.id, { text: 'Payment rejected and stock restored' });
     return true;
@@ -1304,8 +1597,28 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     return true;
   }
 
-  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_SERVE_ORDER_PREFIX)) {
-    return handleServeOrder(bot, query, chatId, userId, messageId, data);
+  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_SERVE_CUSTOMER_PREFIX)) {
+    return handleServeCustomerOpen(bot, query, chatId, messageId, data);
+  }
+
+  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_SERVE_BACK_PREFIX)) {
+    return handleServeBack(bot, query, chatId, messageId, data);
+  }
+
+  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_SERVE_REMAINING_PREFIX)) {
+    return handleServeRemainingOpen(bot, query, chatId, messageId, data);
+  }
+
+  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_SERVE_DROPOFF_PREFIX)) {
+    return handleServeDropoffStart(bot, query, chatId, messageId, data);
+  }
+
+  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_SERVE_MARK_SERVED_PREFIX)) {
+    return handleServeMarkOrder(bot, query, chatId, messageId, data, 'served');
+  }
+
+  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_SERVE_MARK_DROPPED_PREFIX)) {
+    return handleServeMarkOrder(bot, query, chatId, messageId, data, 'dropped_off');
   }
 
   if (data === CALLBACKS.DELIVERY_MODE_FINISH) {
@@ -1404,7 +1717,7 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
       return { posted: false, reason: 'locked' };
     }
 
-    const halls = await getHalls();
+    const halls = await googleSheets.getHalls();
     const hall = halls.find(entry => entry.id === hallId);
 
     if (!hall || !['preorder', 'coming', 'here', 'get-ready'].includes(postMode)) {
@@ -1475,13 +1788,13 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
     await refreshDeliveryModeMenus(bot);
 
     if (postMode === 'here' && notifyChatId) {
-      const hallOrders = await orderStore.getActiveOrdersByHall(hall.name);
+      const hallOrders = await refreshHallServeOrdersCache(hall.name);
 
       if (hallOrders.length > 0) {
         const serveMsg = await bot.sendMessage(
           notifyChatId,
-          `✅ ${hallLabel}, we are here\n\nTap each order when served:`,
-          { reply_markup: buildHallServeOrdersKeyboard(hallOrders) }
+          HALL_SERVE_LIST_HEADER(hall.name),
+          { reply_markup: buildHallCustomerListKeyboard(hall.name, hallOrders) }
         );
         await recordHallServeMessage(hall.name, notifyChatId, serveMsg.message_id);
       }
@@ -1525,7 +1838,7 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
  * The admin ends the night with "Finish Delivery" instead.
  */
 async function autoAdvanceDeliveryStage(bot, hallName) {
-  const halls = await getHalls();
+  const halls = await googleSheets.getHalls();
   const hallIndex = halls.findIndex(hall => hall.name === hallName);
 
   if (hallIndex === -1 || hallIndex === halls.length - 1) {
@@ -1586,10 +1899,220 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
   return true;
 }
 
-async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
-  const orderId = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_SERVE_ORDER_PREFIX);
+/**
+ * Tap a phone number: show that customer's orders and their Served/Dropped
+ * off/Back buttons, editing the tracked message in place. No extra Supabase
+ * round trip in the common case - the order data was already fetched to
+ * build the list this button lives on (see loadHallServeOrders).
+ */
+async function handleServeCustomerOpen(bot, query, chatId, messageId, data) {
+  const { hallName, telegramUserId } = decodeCustomerKey(
+    extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_SERVE_CUSTOMER_PREFIX)
+  );
 
-  const served = await orderStore.markOrderServed(orderId, userId);
+  const hallOrders = await loadHallServeOrders(hallName);
+  const group = groupOrdersByCustomer(hallOrders).find(entry => entry.telegramUserId === telegramUserId);
+
+  if (!group) {
+    // Someone else's tap (or the auto-progress trigger) already resolved
+    // every order this customer had - refresh back to a current list rather
+    // than open an empty submenu.
+    await editMessageTextSafely(bot, HALL_SERVE_LIST_HEADER(hallName), {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: buildHallCustomerListKeyboard(hallName, hallOrders),
+    });
+    await bot.answerCallbackQuery(query.id, { text: 'That customer has no orders left here.' });
+    return true;
+  }
+
+  await editMessageTextSafely(bot, buildCustomerSubmenuText(group), {
+    chat_id: chatId,
+    message_id: messageId,
+    reply_markup: buildCustomerSubmenuKeyboard(hallName, group),
+  });
+  await bot.answerCallbackQuery(query.id);
+  return true;
+}
+
+/** "⬅️ Back" from a customer submenu: return to the phone-number list. */
+async function handleServeBack(bot, query, chatId, messageId, data) {
+  const hallName = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_SERVE_BACK_PREFIX);
+  const hallOrders = await loadHallServeOrders(hallName);
+
+  await editMessageTextSafely(bot, HALL_SERVE_LIST_HEADER(hallName), {
+    chat_id: chatId,
+    message_id: messageId,
+    reply_markup: buildHallCustomerListKeyboard(hallName, hallOrders),
+  });
+  await bot.answerCallbackQuery(query.id);
+  return true;
+}
+
+/** "📦 Drop Remaining Items Off": the collated totals + a phone|handle list. */
+async function handleServeRemainingOpen(bot, query, chatId, messageId, data) {
+  const hallName = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_SERVE_REMAINING_PREFIX);
+  const hallOrders = await loadHallServeOrders(hallName);
+
+  await editMessageTextSafely(bot, buildRemainingItemsText(hallName, hallOrders), {
+    chat_id: chatId,
+    message_id: messageId,
+    reply_markup: buildRemainingItemsKeyboard(hallName, hallOrders),
+  });
+  await bot.answerCallbackQuery(query.id);
+  return true;
+}
+
+/**
+ * Tapping a customer on the remaining-items screen starts the photo relay:
+ * records what to do with the admin's next photo, and asks for it. The
+ * screen itself is left as-is - the prompt is a separate message, same
+ * pattern as the admin's other multi-step text prompts.
+ */
+async function handleServeDropoffStart(bot, query, chatId, messageId, data) {
+  const { hallName, telegramUserId } = decodeCustomerKey(
+    extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_SERVE_DROPOFF_PREFIX)
+  );
+
+  const hallOrders = await loadHallServeOrders(hallName);
+  const group = groupOrdersByCustomer(hallOrders).find(entry => entry.telegramUserId === telegramUserId);
+
+  if (!group) {
+    const refreshed = await refreshHallServeOrdersCache(hallName);
+    await editMessageTextSafely(bot, buildRemainingItemsText(hallName, refreshed), {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: buildRemainingItemsKeyboard(hallName, refreshed),
+    }).catch(() => {});
+    await bot.answerCallbackQuery(query.id, { text: 'That customer has no orders left here.' });
+    return true;
+  }
+
+  await stateStore.set(
+    stateStore.KEYS.awaitingDropoffPhoto(query.from.id),
+    {
+      hallName,
+      telegramUserId,
+      customerChatId: group.orders[0].chatId,
+      orderIds: group.orders.map(order => order.id),
+    },
+    { ttlMs: 15 * 60 * 1000 }
+  );
+
+  const itemLines = group.orders.map(formatOrderItems).join('; ');
+
+  await bot.sendMessage(
+    chatId,
+    `📸 Send a photo showing where you left ${group.handle}'s order:\n\n${itemLines}\n\n`
+    + `I'll forward it to them and mark ${group.orders.length > 1 ? 'their orders' : 'the order'} dropped off.`
+  );
+
+  await bot.answerCallbackQuery(query.id);
+  return true;
+}
+
+/**
+ * The admin's reply to the prompt above: relay the photo to the customer,
+ * delete it from the admin's own chat so a night's worth of drop-offs don't
+ * clutter it up, then mark every order it covers dropped off.
+ *
+ * Returns false (not handled) when there is no pending drop-off for this
+ * sender, or the message isn't actually an image - dispatch then falls
+ * through to the normal payment-receipt handling.
+ */
+async function handleAdminDropoffPhoto(bot, msg) {
+  const adminId = msg.from.id;
+  const chatId = msg.chat.id;
+
+  const pending = await stateStore.get(stateStore.KEYS.awaitingDropoffPhoto(adminId), null);
+
+  if (!pending) {
+    return false;
+  }
+
+  const fileId = msg.photo && msg.photo.length
+    ? msg.photo[msg.photo.length - 1].file_id
+    : (isImageDocument(msg.document) ? msg.document.file_id : null);
+
+  if (!fileId) {
+    return false;
+  }
+
+  try {
+    await bot.sendPhoto(pending.customerChatId, fileId, {
+      caption: "📦 Your order has been dropped off! Here's where to find it.",
+    });
+  } catch (error) {
+    log('warn', 'dropoff_photo_relay_failed', { error: error.message, telegram_user_id: pending.telegramUserId });
+    await bot.sendMessage(
+      chatId,
+      "❌ Could not send that photo to the customer. Please try again, or check they haven't blocked the bot."
+    );
+    return true;
+  }
+
+  // The photo has already been relayed - keeping a copy here too would just
+  // fill the admin's chat with a night's worth of drop-off photos.
+  try {
+    await bot.deleteMessage(chatId, msg.message_id);
+  } catch (error) {
+    log('warn', 'dropoff_photo_delete_failed', { error: error.message });
+  }
+
+  await stateStore.remove(stateStore.KEYS.awaitingDropoffPhoto(adminId));
+
+  const marked = [];
+  for (const orderId of pending.orderIds) {
+    // Fresh-checked per order, same as any other markOrderServed call - one
+    // already resolved elsewhere in the meantime is just skipped, not an error.
+    const served = await orderStore.markOrderServed(orderId, adminId, { kind: 'dropped_off' });
+
+    if (served) {
+      marked.push(served);
+      await autoAdvanceDeliveryStage(bot, served.hallName);
+
+      if (served.wasUnpaid) {
+        await notifyAdminsServedUnpaid(bot, served);
+      }
+    }
+  }
+
+  await refreshHallServeOrdersMessage(bot, pending.hallName);
+  await refreshDeliveryModeMenus(bot);
+
+  await bot.sendMessage(
+    chatId,
+    marked.length
+      ? `✅ Sent and marked ${marked.map(order => order.code).join(', ')} as dropped off.`
+      : '⚠️ Sent the photo, but none of those orders were still active to mark (already handled elsewhere).'
+  );
+
+  return true;
+}
+
+const SERVE_CUSTOMER_MESSAGE = {
+  served: (order, contact) => `✅ Your order ${order.code} has been handed to you, enjoy!${
+    order.wasUnpaid
+      ? `\n\n⚠️ Payment for this order is still pending. Please complete it if you haven't, `
+        + `or contact ${contact} if you've already paid and this looks like a mistake.`
+      : ''
+  }`,
+  dropped_off: (order, contact) => `📦 Your order ${order.code} was dropped off - please come collect it.${
+    order.wasUnpaid
+      ? `\n\n⚠️ Payment for this order is still pending. Please complete it if you haven't, `
+        + `or contact ${contact} if you've already paid and this looks like a mistake.`
+      : ''
+  }`,
+};
+
+/** "✅ Served" / "📦 Dropped off" on one order within a customer's submenu. */
+async function handleServeMarkOrder(bot, query, chatId, messageId, data, kind) {
+  const prefix = kind === 'served'
+    ? CALLBACKS.DELIVERY_MODE_SERVE_MARK_SERVED_PREFIX
+    : CALLBACKS.DELIVERY_MODE_SERVE_MARK_DROPPED_PREFIX;
+  const orderId = extractCallbackValue(data, prefix);
+
+  const served = await orderStore.markOrderServed(orderId, query.from.id, { kind });
 
   if (!served) {
     await bot.answerCallbackQuery(query.id, { text: 'Order is already served or no longer active.' });
@@ -1597,18 +2120,11 @@ async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
   }
 
   try {
-    const tagId = await getPreorderAdminTag();
-    const tagUsername = tagId ? await getAdminUsernameById(bot, tagId) : null;
+    const tagId = await googleSheets.getPreorderAdminTag();
+    const tagUsername = tagId ? await googleSheets.getAdminUsernameById(bot, tagId) : null;
     const contact = tagUsername ? `@${tagUsername}` : 'the admin';
 
-    const message = served.wasUnpaid
-      ? `✅ Your order ${served.code} has been served.\n\n`
-        + `⚠️ Payment for this order is still pending. Please complete it if you haven't, `
-        + `or contact ${contact} if you've already paid and this looks like a mistake.`
-      : `✅ Your order ${served.code} has been delivered/dropped off!\n\n`
-        + `For any issues, please contact ${contact}.`;
-
-    await bot.sendMessage(served.chatId, message);
+    await bot.sendMessage(served.chatId, SERVE_CUSTOMER_MESSAGE[kind](served, contact));
   } catch (error) {
     log('warn', 'serve_notify_failed', { order_code: served.code, error: error.message });
   }
@@ -1621,17 +2137,12 @@ async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
   // just crossed a serve-progress threshold now that one more order is done.
   await autoAdvanceDeliveryStage(bot, served.hallName);
 
-  // Drop just the served order's button, leaving the rest of the list usable.
-  const rows = (query.message.reply_markup && query.message.reply_markup.inline_keyboard) || [];
-  const servedData = `${CALLBACKS.DELIVERY_MODE_SERVE_ORDER_PREFIX}${orderId}`;
-  const remaining = rows
-    .map(row => row.filter(button => button.callback_data !== servedData))
-    .filter(row => row.length > 0);
+  const hallOrders = await refreshHallServeOrdersCache(served.hallName);
 
-  if (remaining.length === 0) {
+  if (hallOrders.length === 0) {
     await editMessageTextSafely(
       bot,
-      `${query.message.text || '✅ Orders for this hall'}\n\n✅ All orders in this list have been served.`,
+      `${HALL_SERVE_LIST_HEADER(served.hallName)}\n\n✅ All orders in this list have been served.`,
       { chat_id: chatId, message_id: messageId }
     ).catch(() => {});
 
@@ -1642,14 +2153,29 @@ async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
       await clearHallServeMessage(served.hallName);
     }
   } else {
-    await bot.editMessageReplyMarkup(
-      { inline_keyboard: remaining },
-      { chat_id: chatId, message_id: messageId }
-    ).catch(() => {});
+    const remainingForCustomer = hallOrders.filter(order => order.userId === served.userId);
+
+    if (remainingForCustomer.length > 0) {
+      const group = groupOrdersByCustomer(remainingForCustomer)[0];
+      await editMessageTextSafely(bot, buildCustomerSubmenuText(group), {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: buildCustomerSubmenuKeyboard(served.hallName, group),
+      }).catch(() => {});
+    } else {
+      await editMessageTextSafely(bot, HALL_SERVE_LIST_HEADER(served.hallName), {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: buildHallCustomerListKeyboard(served.hallName, hallOrders),
+      }).catch(() => {});
+    }
   }
 
   await refreshDeliveryModeMenus(bot);
-  await bot.answerCallbackQuery(query.id, { text: `Order ${served.code} marked as served.` });
+  await bot.answerCallbackQuery(
+    query.id,
+    { text: `Order ${served.code} marked ${kind === 'served' ? 'served' : 'dropped off'}.` }
+  );
   return true;
 }
 
@@ -1704,7 +2230,7 @@ async function refreshHallServeOrdersMessage(bot, hallName) {
     return;
   }
 
-  const hallOrders = await orderStore.getActiveOrdersByHall(hallName);
+  const hallOrders = await refreshHallServeOrdersCache(hallName);
 
   if (hallOrders.length === 0) {
     await clearHallServeMessage(hallName);
@@ -1712,10 +2238,16 @@ async function refreshHallServeOrdersMessage(bot, hallName) {
   }
 
   try {
-    await bot.editMessageReplyMarkup(
-      buildHallServeOrdersKeyboard(hallOrders),
-      { chat_id: tracked.chatId, message_id: tracked.messageId }
-    );
+    // Forces back to the top-level list view even if the admin currently has
+    // a customer submenu open on this same message - the new order changes
+    // what the list looks like, and there is no clean way to patch a
+    // submenu's keyboard alone without risking a stale customer's Served/
+    // Dropped off buttons pointing at the wrong content.
+    await editMessageTextSafely(bot, HALL_SERVE_LIST_HEADER(hallName), {
+      chat_id: tracked.chatId,
+      message_id: tracked.messageId,
+      reply_markup: buildHallCustomerListKeyboard(hallName, hallOrders),
+    });
   } catch (error) {
     if (!String(error.message || '').includes('message is not modified')) {
       log('warn', 'hall_serve_message_refresh_failed', { hall: hallName, error: error.message });
@@ -1767,6 +2299,10 @@ module.exports = {
   handleAdminCallback,
   refreshPreorderPost,
   refreshHallServeOrdersMessage,
+  findNewlySoldOutItems,
+  announceSoldOut,
+  repostPreorderAvailability,
+  refreshPreorderPostAfterStockChange,
   sendPaymentInstructions,
   buildPaymentCaption,
   buildPreorderMessageText,
@@ -1782,4 +2318,25 @@ module.exports = {
   blockHallForAutoClosure,
   postDingoUpdate,
   autoAdvanceDeliveryStage,
+
+  groupOrdersByCustomer,
+  sortCustomerGroups,
+  formatCustomerListButtonText,
+  encodeCustomerKey,
+  decodeCustomerKey,
+  buildHallCustomerListKeyboard,
+  buildCustomerSubmenuText,
+  buildCustomerSubmenuKeyboard,
+  loadHallServeOrders,
+  refreshHallServeOrdersCache,
+  handleServeCustomerOpen,
+  handleServeBack,
+  handleServeMarkOrder,
+
+  collateRemainingItems,
+  buildRemainingItemsText,
+  buildRemainingItemsKeyboard,
+  handleServeRemainingOpen,
+  handleServeDropoffStart,
+  handleAdminDropoffPhoto,
 };

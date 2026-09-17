@@ -40,6 +40,52 @@ test('markOrderServed reports whether the order was still unpaid at serve time',
   assert.equal(served.wasUnpaid, true);
 });
 
+test('markOrderServed defaults to a "served in person" reason', async t => {
+  t.mock.method(repo, 'getOrderById', async () => ({ id: 'o1', status: STATUS.PAID }));
+
+  let recordedReason;
+  t.mock.method(repo, 'transitionOrderStatus', async (id, from, to, actor, reason) => {
+    recordedReason = reason;
+    return { id: 'o1', status: STATUS.SERVED, order_items: [], customers: {} };
+  });
+
+  const served = await orderStore.markOrderServed('o1', 999);
+
+  assert.equal(recordedReason, 'Served in person');
+  assert.equal(served.kind, 'served');
+});
+
+test('markOrderServed records a distinct reason and kind for "dropped off"', async t => {
+  t.mock.method(repo, 'getOrderById', async () => ({ id: 'o1', status: STATUS.PAID }));
+
+  let recordedReason;
+  t.mock.method(repo, 'transitionOrderStatus', async (id, from, to, actor, reason) => {
+    recordedReason = reason;
+    return { id: 'o1', status: STATUS.SERVED, order_items: [], customers: {} };
+  });
+
+  const served = await orderStore.markOrderServed('o1', 999, { kind: 'dropped_off' });
+
+  assert.equal(recordedReason, 'Dropped off');
+  assert.equal(served.kind, 'dropped_off');
+  // Same lifecycle status either way - only the history reason differs.
+  assert.equal(served.status, STATUS.SERVED);
+});
+
+test('markOrderServed folds the unpaid caveat into whichever reason applies', async t => {
+  t.mock.method(repo, 'getOrderById', async () => ({ id: 'o1', status: STATUS.AWAITING_PAYMENT }));
+
+  let recordedReason;
+  t.mock.method(repo, 'transitionOrderStatus', async (id, from, to, actor, reason) => {
+    recordedReason = reason;
+    return { id: 'o1', status: STATUS.SERVED, order_items: [], customers: {} };
+  });
+
+  await orderStore.markOrderServed('o1', 999, { kind: 'dropped_off' });
+
+  assert.equal(recordedReason, 'Dropped off while awaiting_payment');
+});
+
 test('markOrderServed reports paid orders as not unpaid', async t => {
   t.mock.method(repo, 'getOrderById', async () => ({ id: 'o2', status: STATUS.PAID }));
   t.mock.method(repo, 'transitionOrderStatus', async () => (

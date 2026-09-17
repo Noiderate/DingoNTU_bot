@@ -95,22 +95,31 @@ const ORDER_SELECT = '*, order_items(*), customers(*)';
 
 // --- Customers ---------------------------------------------------------------
 
-async function upsertCustomer({ telegramUserId, username, firstName, lastName }) {
+/**
+ * `phoneNumber` is deliberately left out of the payload when not passed, not
+ * defaulted to null - Supabase's upsert only overwrites the columns present
+ * in the payload, so every OTHER call site (order creation touches this on
+ * every order) leaves an already-collected phone number untouched.
+ */
+async function upsertCustomer({ telegramUserId, username, firstName, lastName, phoneNumber }) {
   const supabase = getSupabase();
+
+  const payload = {
+    telegram_user_id: telegramUserId,
+    telegram_username: username || null,
+    first_name: firstName || null,
+    last_name: lastName || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (phoneNumber !== undefined) {
+    payload.phone_number = phoneNumber;
+  }
 
   const rows = unwrap(
     await supabase
       .from('customers')
-      .upsert(
-        {
-          telegram_user_id: telegramUserId,
-          telegram_username: username || null,
-          first_name: firstName || null,
-          last_name: lastName || null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'telegram_user_id' }
-      )
+      .upsert(payload, { onConflict: 'telegram_user_id' })
       .select()
       .limit(1),
     'upsertCustomer'

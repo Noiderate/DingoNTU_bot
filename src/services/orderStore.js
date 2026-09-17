@@ -49,6 +49,7 @@ function toOrder(row) {
     userId: customer.telegram_user_id ? Number(customer.telegram_user_id) : null,
     userName: customer.first_name || 'Unknown',
     username: customer.telegram_username || null,
+    phoneNumber: customer.phone_number || null,
     chatId: row.telegram_chat_id ? Number(row.telegram_chat_id) : null,
 
     hallName: row.hall_name_snapshot,
@@ -145,7 +146,16 @@ async function getActiveOrdersByHall(hallName) {
   return (await repo.getActiveOrdersByHall(hallName)).map(toOrder);
 }
 
-async function markOrderServed(orderId, adminId) {
+// Both outcomes transition the order to the same SERVED status - "served in
+// person" vs "left unattended" is a real operational difference worth telling
+// the customer and recording, but not a different order lifecycle state, so
+// it lives in the history reason rather than a new status enum value.
+const SERVE_KIND_REASONS = {
+  served: 'Served in person',
+  dropped_off: 'Dropped off',
+};
+
+async function markOrderServed(orderId, adminId, { kind = 'served' } = {}) {
   const current = await repo.getOrderById(orderId);
 
   if (!current || !repo.ACTIVE_STATUSES.includes(current.status)) {
@@ -153,6 +163,7 @@ async function markOrderServed(orderId, adminId) {
   }
 
   const wasUnpaid = current.status !== STATUS.PAID;
+  const baseReason = SERVE_KIND_REASONS[kind] || SERVE_KIND_REASONS.served;
 
   // A paid order can be served directly. An unpaid one is still marked
   // served because staff physically handed the food over; the payment state
@@ -163,7 +174,7 @@ async function markOrderServed(orderId, adminId) {
     current.status,
     STATUS.SERVED,
     'admin',
-    wasUnpaid ? `Served while ${current.status}` : 'Served',
+    wasUnpaid ? `${baseReason} while ${current.status}` : baseReason,
     { actorTelegramId: adminId }
   );
 
@@ -171,7 +182,7 @@ async function markOrderServed(orderId, adminId) {
     return null;
   }
 
-  return { ...toOrder(order), wasUnpaid };
+  return { ...toOrder(order), wasUnpaid, kind };
 }
 
 
@@ -284,7 +295,7 @@ async function clearBlockedHalls() {
 
   unwrap(
     // Supabase requires a filter on delete; this matches every row.
-    await supabase.from('halls_state').delete().neq('hall_name', ' '),
+    await supabase.from('halls_state').delete().neq('hall_name', ' '),
     'clearBlockedHalls'
   );
 }
