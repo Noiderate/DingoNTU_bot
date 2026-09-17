@@ -189,12 +189,18 @@ deploy competes with production for the same updates.
 
 **Payment instruction image missing**
 
-`vercel.json` has `includeFiles: "src/Payment_Instruction.*"`. After the first
-successful send, the Telegram `file_id` is cached in `bot_state` under
-`cache:payment_image_file_id` and the local file stops mattering. If the image
-never appears, the caption is still sent — `sendPaymentInstructions()` in
-`src/handlers/admin.js` falls back to text so the customer always learns the
-amount.
+When `PAYNOW_UEN` or `PAYNOW_PROXY_NUMBER` is configured, `sendPaymentInstructions()`
+in `src/handlers/admin.js` generates a PayNow QR per order (via
+`src/services/paynowQr.js`) with the exact amount and order code baked in, and
+sends it together with the example screenshot as one Telegram album
+(`sendMediaGroup`). This QR is never cached — the amount differs per order.
+
+If neither is configured, or Telegram rejects the album, it falls back to the
+static image flow: `vercel.json` has `includeFiles: "src/Payment_Instruction.*"`,
+and after the first successful send the Telegram `file_id` is cached in
+`bot_state` under `cache:payment_image_file_id` so the local file stops
+mattering. If no image can be sent at all, the caption is still sent as plain
+text so the customer always learns the amount.
 
 ### 3.2 Stale or stuck state
 

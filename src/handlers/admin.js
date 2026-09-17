@@ -13,6 +13,7 @@ const orderStore = require('../services/orderStore');
 const orderActions = require('../services/orderActions');
 const repo = require('../services/orderRepository');
 const stateStore = require('../services/stateStore');
+const paynowQr = require('../services/paynowQr');
 const { getMenuMessageId, setMenuMessageId, clearMenuMessageId } = require('../services/chatTracker');
 const { config } = require('../config');
 const { formatCents } = require('../utils/money');
@@ -529,8 +530,120 @@ function buildPaymentCaption(order) {
   return heading + displayed + instructions;
 }
 
+const PAYMENT_EXAMPLE_IMAGE = 'src/payment_example.png';
+const PAYMENT_EXAMPLE_CAPTION = '📸 Example of a valid screenshot — yours should show the date, time, amount and who it was paid to, just like this:';
+
+/**
+ * Generate this order's PayNow QR (amount and order code baked in) as a media
+ * item, ready to go alongside the example screenshot in one album.
+ *
+ * Returns null whenever a QR can't be produced - no UEN/mobile configured, or
+ * the encoder itself failed - so the caller falls back to the static image.
+ */
+async function buildDynamicQrMedia(order, caption) {
+  let buffer;
+  try {
+    buffer = await paynowQr.generatePayNowQrPng({
+      uen: config.payment.uen,
+      mobile: config.payment.proxyNumber,
+      amountCents: order.totalCents,
+      merchantName: config.payment.merchantName,
+      reference: order.code,
+    });
+  } catch (error) {
+    log('warn', 'paynow_qr_generate_failed', { order_code: order.code, error: error.message });
+    return null;
+  }
+
+  if (!buffer) {
+    return null;
+  }
+
+  return {
+    type: 'photo',
+    media: buffer,
+    caption,
+    fileOptions: { filename: 'paynow-qr.png', contentType: 'image/png' },
+  };
+}
+
+/**
+ * The example-screenshot media item, reusing a previously uploaded file_id
+ * when one is cached so the album doesn't re-upload the same image forever.
+ */
+async function buildExampleMedia() {
+  let cachedFileId = null;
+  try {
+    cachedFileId = await stateStore.get(stateStore.KEYS.paymentExampleImageFileId(), null);
+  } catch (error) {
+    log('warn', 'payment_example_cache_read_failed', { error: error.message });
+  }
+
+  return {
+    item: {
+      type: 'photo',
+      media: cachedFileId || resolveImageSource(PAYMENT_EXAMPLE_IMAGE),
+      caption: PAYMENT_EXAMPLE_CAPTION,
+    },
+    cached: Boolean(cachedFileId),
+  };
+}
+
+async function cacheExampleFileId(sentMessages) {
+  const examplePhoto = sentMessages?.[1]?.photo;
+  if (!examplePhoto?.length) {
+    return;
+  }
+  try {
+    await stateStore.set(
+      stateStore.KEYS.paymentExampleImageFileId(),
+      examplePhoto[examplePhoto.length - 1].file_id,
+      { ttlMs: 30 * 24 * 60 * 60 * 1000 }
+    );
+  } catch (error) {
+    log('warn', 'payment_example_cache_write_failed', { error: error.message });
+  }
+}
+
+/**
+ * Try to send the QR and the example screenshot together as one album, so
+ * they show up in the same swipeable image gallery in Telegram instead of as
+ * two separate messages.
+ *
+ * Returns true on success. Returns false - without having sent anything - for
+ * the caller to fall back to the legacy per-photo flow: no PayNow identity is
+ * configured, the encoder failed, or Telegram rejected the album itself.
+ */
+async function sendPaymentGallery(bot, order, caption) {
+  const qrMedia = await buildDynamicQrMedia(order, caption);
+  if (!qrMedia) {
+    return false;
+  }
+
+  const { item: exampleMedia, cached } = await buildExampleMedia();
+
+  let sent;
+  try {
+    sent = await bot.sendMediaGroup(order.chatId, [qrMedia, exampleMedia]);
+  } catch (error) {
+    log('warn', 'payment_gallery_send_failed', { order_code: order.code, error: error.message });
+    return false;
+  }
+
+  if (!cached) {
+    await cacheExampleFileId(sent);
+  }
+
+  return true;
+}
+
 async function sendPaymentInstructions(bot, order) {
   const caption = buildPaymentCaption(order);
+
+  if (await sendPaymentGallery(bot, order, caption)) {
+    return;
+  }
+
   let cachedFileId = null;
   try {
     cachedFileId = await stateStore.get(stateStore.KEYS.paymentImageFileId(), null);
@@ -571,8 +684,6 @@ async function sendPaymentInstructions(bot, order) {
       'Payment image unavailable. Please contact an admin for payment details.'));
 }
 
-const PAYMENT_EXAMPLE_IMAGE = 'src/payment_example.png';
-
 /**
  * Follow-up photo showing what a correctly-completed receipt looks like, so
  * "UNCROPPED... MUST INCLUDE DATE, TIME AND PAYMENT AMOUNT AND TO WHO" in the
@@ -588,13 +699,12 @@ async function sendPaymentExample(bot, chatId) {
     log('warn', 'payment_example_cache_read_failed', { error: error.message });
   }
 
-  const caption = '📸 Example of a valid screenshot — yours should show the date, time, amount and who it was paid to, just like this:';
   const sources = [...new Set([cachedFileId, PAYMENT_EXAMPLE_IMAGE].filter(Boolean))];
 
   for (const source of sources) {
     let sent;
     try {
-      sent = await bot.sendPhoto(chatId, resolveImageSource(source), { caption });
+      sent = await bot.sendPhoto(chatId, resolveImageSource(source), { caption: PAYMENT_EXAMPLE_CAPTION });
     } catch (error) {
       log('warn', 'payment_example_send_failed', { error: error.message });
       continue;

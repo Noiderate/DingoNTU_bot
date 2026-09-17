@@ -208,6 +208,17 @@ function isQuotaError(error) {
     && (error.status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(error.message));
 }
 
+/**
+ * Whether an error means the model's servers are overloaded/unavailable
+ * (500/502/503/504, "UNAVAILABLE", "overloaded"). Worth trying the fallback
+ * model immediately rather than hammering the same overloaded endpoint.
+ */
+function isOverloadedError(error) {
+  return error instanceof GeminiError
+    && ([500, 502, 503, 504].includes(Number(error.status))
+      || /UNAVAILABLE|overloaded|internal error/i.test(error.message));
+}
+
 /** One call to one specific model. Everything extractReceipt does per model. */
 async function callModel(model, imageBuffer, mimeType) {
   const ai = getClient();
@@ -276,11 +287,12 @@ async function callModel(model, imageBuffer, mimeType) {
  * Extract structured fields from a receipt image.
  *
  * Tries the configured model first. If that specifically fails on a quota/rate
- * limit error and a fallback model is configured, it is tried immediately in
- * the same call rather than burning the caller's retry budget re-hitting a
- * model that will not recover until its daily quota resets. Any other error -
- * or a quota error from the fallback too - is thrown as-is for the caller's
- * normal backoff-and-retry loop to handle.
+ * limit error or a server overload error, and a fallback model is configured,
+ * it is tried immediately in the same call rather than burning the caller's
+ * retry budget re-hitting a model that will not recover until its daily quota
+ * resets (or that is currently overloaded). Any other error - or the same kind
+ * of error from the fallback too - is thrown as-is for the caller's normal
+ * backoff-and-retry loop to handle.
  *
  * @param {Buffer} imageBuffer
  * @param {string} mimeType
@@ -293,11 +305,19 @@ async function extractReceipt(imageBuffer, mimeType) {
   try {
     return await callModel(primary, imageBuffer, mimeType);
   } catch (error) {
-    if (!fallback || fallback === primary || !isQuotaError(error)) {
+    const isQuota = isQuotaError(error);
+    const isOverloaded = isOverloadedError(error);
+
+    if (!fallback || fallback === primary || !(isQuota || isOverloaded)) {
       throw error;
     }
 
-    log('warn', 'gemini_fallback_triggered', { primary, fallback, status: error.status });
+    log('warn', 'gemini_fallback_triggered', {
+      primary,
+      fallback,
+      status: error.status,
+      reason: isQuota ? 'quota' : 'overloaded',
+    });
 
     return callModel(fallback, imageBuffer, mimeType);
   }
@@ -308,6 +328,7 @@ module.exports = {
   validateExtraction,
   classifyError,
   isQuotaError,
+  isOverloadedError,
   GeminiError,
   RECEIPT_SCHEMA,
   SYSTEM_INSTRUCTION,

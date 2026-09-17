@@ -92,6 +92,7 @@ const config = {
     recipientAliases: readList('PAYNOW_RECIPIENT_ALIASES'),
     uen: readString('PAYNOW_UEN'),
     proxyNumber: readString('PAYNOW_PROXY_NUMBER'),
+    merchantName: readString('PAYNOW_MERCHANT_NAME', 'Dingo Cafe'),
     maxAgeMinutes: readInt('PAYMENT_MAX_AGE_MINUTES', 30),
     clockSkewMinutes: readInt('PAYMENT_CLOCK_SKEW_MINUTES', 5),
     windowMinutes: readInt('PAYMENT_WINDOW_MINUTES', 2),
