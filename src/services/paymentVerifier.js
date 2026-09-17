@@ -371,17 +371,41 @@ async function applyOutcome(bot, { order, submission, decision, patch }) {
 // --- The pipeline ------------------------------------------------------------
 
 /**
- * Run verification for one claimed submission.
+ * Run verification for one submission.
  *
  * `deadline` is when this invocation must stop. If work remains, the job is
  * released back to the queue with next_attempt_at rather than being killed
  * mid-flight, so the scheduled worker continues it.
+ *
+ * `alreadyClaimed` is true only when the caller (the scheduled worker's
+ * processQueue) already holds this submission's lease via claimNextSubmission.
+ * Otherwise - the synchronous in-request path triggered by the customer's
+ * message - this claims it itself first. A freshly-submitted receipt is
+ * immediately claimable (queued, unlocked, due now by default), so without
+ * this a scheduled tick landing in the same window could run a second,
+ * fully independent verification pass on it concurrently.
  */
-async function processSubmission(bot, submissionId, { deadline = Date.now() + config.worker.timeBudgetMs } = {}) {
+async function processSubmission(bot, submissionId, {
+  deadline = Date.now() + config.worker.timeBudgetMs,
+  alreadyClaimed = false,
+  workerId = null,
+} = {}) {
   let submission = await repo.getPaymentSubmission(submissionId);
 
   if (!submission) {
     return { skipped: 'missing' };
+  }
+
+  if (!alreadyClaimed) {
+    const claimed = await repo.claimSubmissionById(submissionId, workerId || `sync-${crypto.randomUUID().slice(0, 8)}`);
+
+    if (!claimed) {
+      // Someone else - the scheduled worker, or a concurrent retry of this
+      // same request - already holds a live lease on it.
+      return { skipped: 'already_claimed' };
+    }
+
+    submission = claimed;
   }
 
   const orderRow = await repo.getOrderById(submission.order_id);
@@ -540,11 +564,24 @@ async function handleTerminalFailure(bot, { order, submission, error }) {
     'system', `Gemini verification failure: ${error.message}`
   );
 
+  if (!flagged) {
+    // The order left VERIFYING_PAYMENT before this failure was recorded -
+    // some other decision (an admin's, or a concurrent successful run) has
+    // already reached the customer. Telling them "couldn't verify" now, or
+    // forwarding a stale review card to admins, would only contradict
+    // whatever they already saw.
+    log('warn', 'verification_failure_superseded', {
+      order_code: order.code,
+      submission_id: submission.id,
+    });
+    return { outcome: 'error', superseded: true };
+  }
+
   await editProcessingMessage(bot, order.chatId, submission.processing_message_id, MESSAGES.FLAGGED);
 
   await forwardToAdmins(
     bot,
-    flagged ? orderStore.toOrder(flagged) : order,
+    orderStore.toOrder(flagged),
     submission,
     { reasons: [REASONS.GEMINI_VERIFICATION_FAILURE], normalized: {} }
   );
@@ -616,7 +653,7 @@ async function processQueue(bot, { deadline = Date.now() + config.worker.timeBud
       break;
     }
 
-    const result = await processSubmission(bot, submission.id, { deadline });
+    const result = await processSubmission(bot, submission.id, { deadline, alreadyClaimed: true });
     processed.push({ submission_id: submission.id, ...result });
   }
 

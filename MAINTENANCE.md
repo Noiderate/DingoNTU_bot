@@ -490,6 +490,8 @@ from orders where created_at > now() - interval '1 day' order by created_at;
 *Prevention:* edit stock through the admin menu, not the spreadsheet, during a
 run.
 
+**Payment verification also runs under a lease**, on `payment_submissions.locked_until`/`locked_by`. Both entry points must claim a submission before touching it: the scheduled worker via `claimNextSubmission()`, and the synchronous in-request path (triggered by the customer's screenshot, run via `waitUntil`) via `claimSubmissionById()` inside `processSubmission()` itself. A freshly-submitted receipt is immediately claimable (queued, unlocked, due now by default), so without the synchronous path also claiming it, a scheduled tick landing in that same window could run a second, fully independent verification pass on it concurrently - each hitting Gemini separately and potentially disagreeing on the outcome (one flagging to admins, the other auto-approving). If you ever add a third way to reach `processSubmission()`, it must claim first too (pass `alreadyClaimed: true` only if the caller already holds the lease).
+
 ### 3.15 Stuck orders and submissions
 
 ```sql

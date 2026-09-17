@@ -582,6 +582,49 @@ async function claimNextSubmission(workerId, { leaseMs = 120000 } = {}) {
   return { submission: null, duplicates };
 }
 
+/**
+ * Atomically claim one specific submission by id, for the synchronous
+ * in-request verification path.
+ *
+ * Without this, a freshly-created submission (queued, unlocked, due
+ * immediately per its defaults) is claimable by the scheduled worker's
+ * claimNextSubmission() the instant it exists. The synchronous path used to
+ * process it directly with no lease of its own, so a cron tick landing in
+ * that window could run a second, fully independent verification pass on the
+ * same submission concurrently - each hitting Gemini separately and
+ * potentially disagreeing on the outcome. This uses the exact same
+ * conditional-UPDATE pattern claimNextSubmission uses per candidate, just
+ * targeted at a known id instead of a queue scan.
+ *
+ * Returns the claimed row, or null if someone else (another invocation, or
+ * the scheduled worker) already holds a live lease on it - the caller must
+ * skip processing rather than duplicate that work.
+ */
+async function claimSubmissionById(submissionId, workerId, { leaseMs = 120000 } = {}) {
+  const supabase = getSupabase();
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  const result = await supabase
+    .from('payment_submissions')
+    .update({
+      outcome: 'processing',
+      locked_by: workerId,
+      locked_until: new Date(now.getTime() + leaseMs).toISOString(),
+      processing_started_at: nowIso,
+    })
+    .eq('id', submissionId)
+    .or(`locked_until.is.null,locked_until.lt.${nowIso}`)
+    .in('outcome', ['queued', 'processing'])
+    .select()
+    .limit(1);
+
+  unwrap(result, 'claimSubmissionById');
+
+  const rows = result.data || [];
+  return rows[0] || null;
+}
+
 /** Hand a job back to the queue for a later attempt. */
 async function releaseSubmission(submissionId, { nextAttemptAt, lastError = null }) {
   return updatePaymentSubmission(submissionId, {
@@ -715,6 +758,7 @@ module.exports = {
   getPaymentSubmission,
   countLiveVerificationLeases,
   claimNextSubmission,
+  claimSubmissionById,
   releaseSubmission,
   countIncompleteAttempts,
   findConflictingSubmission,
