@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const repo = require('./orderRepository');
 const orderStore = require('./orderStore');
 const orderActions = require('./orderActions');
+const { refreshDeliveryModeMenus } = require('../handlers/deliveryMode');
 const { extractReceipt, GeminiError } = require('./geminiClient');
 const { evaluatePayment, OUTCOMES, REASONS } = require('./paymentRules');
 const { getAdminIds } = require('./googleSheets');
@@ -319,6 +320,10 @@ async function applyOutcome(bot, { order, submission, decision, patch }) {
         `✅ Payment received and verified for Order ${order.code}.\n\n`
         + `${formatCents(order.totalCents)} confirmed. Your order is being prepared. 🍽️`
       );
+      // The admin's manual "Accept Payment" path refreshes this same menu -
+      // auto-approval must too, or a paid order keeps showing "unpaid" in
+      // delivery mode until an admin happens to navigate away and back.
+      await refreshDeliveryModeMenus(bot);
     }
 
     return { outcome: effectiveOutcome };

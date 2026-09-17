@@ -4,6 +4,7 @@ const { getSupabase, unwrap } = require('./supabase');
 const { processQueue } = require('./paymentVerifier');
 const { drainOutbox, reconcile } = require('./sheetMirror');
 const { refreshPreorderPost } = require('../handlers/admin');
+const { refreshDeliveryModeMenus } = require('../handlers/deliveryMode');
 const { ensureAdminIdsLoaded } = require('./googleSheets');
 const repo = require('./orderRepository');
 const orderStore = require('./orderStore');
@@ -119,6 +120,10 @@ async function runSweep() {
 
   if (results.expired > 0) {
     await refreshPreorderPost(bot).catch(() => {});
+    // An expired order drops out of delivery mode's active list - without
+    // this an admin with the menu open keeps seeing it until they navigate
+    // away and back.
+    await refreshDeliveryModeMenus(bot).catch(() => {});
   }
 
   return results;
