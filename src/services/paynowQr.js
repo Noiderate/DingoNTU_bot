@@ -1,4 +1,5 @@
 const QRCode = require('qrcode');
+const { PNG } = require('pngjs');
 
 /**
  * Builds a per-order PayNow QR code.
@@ -99,8 +100,32 @@ function buildPayNowPayload({ uen, mobile, amountCents, merchantName, reference 
   return withoutCrc + crc16(withoutCrc);
 }
 
+// Matches src/payment_example.png's own dimensions (a typical phone
+// screenshot). Telegram crops photos of mismatched aspect ratio to a common
+// box when it lays out an album, so a bare square QR next to that portrait
+// screenshot gets cropped off-center; padding the QR onto a canvas of the
+// same shape keeps Telegram trimming whitespace instead of the code itself.
+const CANVAS_WIDTH = 582;
+const CANVAS_HEIGHT = 1280;
+const QR_PIXEL_SIZE = 480;
+
+/** White canvasWidth x canvasHeight PNG with qrPng's pixels centered on it. */
+function padOntoPortraitCanvas(qrPng, canvasWidth, canvasHeight) {
+  const qr = PNG.sync.read(qrPng);
+  const canvas = new PNG({ width: canvasWidth, height: canvasHeight });
+  canvas.data.fill(0xff); // opaque white
+
+  const offsetX = Math.round((canvasWidth - qr.width) / 2);
+  const offsetY = Math.round((canvasHeight - qr.height) / 2);
+  PNG.bitblt(qr, canvas, 0, 0, qr.width, qr.height, offsetX, offsetY);
+
+  return PNG.sync.write(canvas);
+}
+
 /**
- * Render a PayNow QR for one order as a PNG buffer.
+ * Render a PayNow QR for one order as a PNG buffer, padded onto a portrait
+ * canvas so it doesn't get cropped off-center when Telegram lays it out in
+ * an album next to the (portrait) example screenshot.
  *
  * Never throws for a missing identity - returns null so the caller can fall
  * back to the static instruction image.
@@ -112,11 +137,13 @@ async function generatePayNowQrPng({ uen, mobile, amountCents, merchantName, ref
     return null;
   }
 
-  return QRCode.toBuffer(payload, {
+  const qrPng = await QRCode.toBuffer(payload, {
     errorCorrectionLevel: 'M',
     margin: 2,
-    width: 512,
+    width: QR_PIXEL_SIZE,
   });
+
+  return padOntoPortraitCanvas(qrPng, CANVAS_WIDTH, CANVAS_HEIGHT);
 }
 
 module.exports = {

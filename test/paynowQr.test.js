@@ -89,3 +89,13 @@ test('generatePayNowQrPng renders a PNG buffer when an identity is configured, n
 
   assert.equal(await generatePayNowQrPng({ amountCents: 500 }), null);
 });
+
+test('the QR is padded onto a portrait canvas matching the example screenshot, so Telegram album layout does not crop it off-center', async () => {
+  const buffer = await generatePayNowQrPng({ uen: '201912345A', amountCents: 500, reference: 'DG1' });
+  // IHDR width/height, per the PNG spec, at fixed byte offsets right after
+  // the signature and chunk header.
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  assert.equal(width, 582);
+  assert.equal(height, 1280);
+});

@@ -513,6 +513,7 @@ function buildPaymentCaption(order) {
     + 'Please use PayNow to pay using the QR above.\n\n'
     + 'Send an UNCROPPED screenshot of the completed transfer for automatic verification. You can send it as a photo or file.\n\n'
     + 'MUST INCLUDE DATE, TIME AND PAYMENT AMOUNT AND TO WHO\n\n'
+    + '📸 Swipe for an example of a valid screenshot.\n\n'
     + (config.payment.expiryEnabled ? `⚠️ Pay within ${config.payment.windowMinutes} minutes.` : 'Please send your receipt after payment.');
   const summary = orderActions.buildOrderSummary(order);
   const suffix = '\n… Full order: /orders';
@@ -556,6 +557,11 @@ async function buildDynamicQrMedia(order, caption) {
   }
 
   if (!buffer) {
+    // Distinguishable from a generation error above: this is "no PayNow
+    // identity configured" (config.payment.uen/proxyNumber both empty at
+    // request time), which is otherwise silent and easy to mistake for the
+    // encoder having failed.
+    log('warn', 'paynow_qr_no_identity_configured', { order_code: order.code });
     return null;
   }
 
@@ -570,6 +576,11 @@ async function buildDynamicQrMedia(order, caption) {
 /**
  * The example-screenshot media item, reusing a previously uploaded file_id
  * when one is cached so the album doesn't re-upload the same image forever.
+ *
+ * Deliberately uncaptioned: Telegram only renders an album's caption when
+ * exactly one item in the group has one, so the QR's caption (the actual
+ * payment instructions) would silently disappear if this item had its own
+ * too. The "swipe for an example" line lives in that caption instead.
  */
 async function buildExampleMedia() {
   let cachedFileId = null;
@@ -583,7 +594,6 @@ async function buildExampleMedia() {
     item: {
       type: 'photo',
       media: cachedFileId || resolveImageSource(PAYMENT_EXAMPLE_IMAGE),
-      caption: PAYMENT_EXAMPLE_CAPTION,
     },
     cached: Boolean(cachedFileId),
   };

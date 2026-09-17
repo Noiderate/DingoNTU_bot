@@ -27,7 +27,10 @@ test('the QR and the example screenshot ship together as one swipeable gallery',
   assert.match(media[0].caption, /Rice x1/);
   assert.match(media[0].caption, /Please use PayNow to pay using the QR above\./);
   assert.match(media[0].caption, /DG20260916-1/);
-  assert.match(media[1].caption, /Example of a valid screenshot/);
+  assert.match(media[0].caption, /Swipe for an example/);
+  // Telegram only renders an album's caption when exactly one item carries
+  // one - a second caption here would silently blank out the whole thing.
+  assert.equal(media[1].caption, undefined);
 });
 
 test('a stale cached QR retries the configured static image, still as one gallery', async t => {
@@ -111,7 +114,7 @@ test('when a PayNow UEN is configured, the QR and example ship together as one a
   assert.equal(media.length, 2);
   assert.ok(Buffer.isBuffer(media[0].media));
   assert.match(media[0].caption, /Please use PayNow to pay using the QR above\./);
-  assert.match(media[1].caption, /Example of a valid screenshot/);
+  assert.equal(media[1].caption, undefined);
 });
 
 test('a broken example never costs the customer their QR: falls back to a lone photo plus a best-effort example', async t => {
