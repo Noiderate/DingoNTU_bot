@@ -88,11 +88,19 @@ async function markOrderPaid(bot, order, { fromStatus, actor, actorTelegramId, r
 
   const paidOrder = orderStore.toOrder(updated);
 
-  await notify(
-    bot,
-    paidOrder.chatId,
-    `✅ Payment for Order ${paidOrder.code} has been accepted! Your order is being prepared. 🍽️`
-  );
+  // Only reachable via an admin's manual accept (the automatic verifier
+  // always transitions from VERIFYING_PAYMENT) - the order was already
+  // served, so "being prepared" would be wrong.
+  //
+  // This is the customer's ONE confirmation message regardless of who/what
+  // approved it - the automatic verifier used to send its own extra, near-
+  // duplicate message on top of this one; that's now folded in here instead.
+  const message = fromStatus === STATUS.SERVED
+    ? `✅ Payment for Order ${paidOrder.code} has been confirmed. Thanks!`
+    : `✅ Payment for Order ${paidOrder.code} confirmed - ${formatCents(paidOrder.totalCents)} received.\n\n`
+      + `Your order is being prepared. 🍽️`;
+
+  await notify(bot, paidOrder.chatId, message);
 
   log('info', 'order_paid', {
     order_code: paidOrder.code,

@@ -41,6 +41,8 @@ const ALLOWED_TRANSITIONS = {
     STATUS.REJECTED,
     STATUS.CANCELLED,
     STATUS.EXPIRED,
+    // Staff can hand over food before payment clears (see orderStore.markOrderServed).
+    STATUS.SERVED,
   ],
   [STATUS.VERIFYING_PAYMENT]: [
     STATUS.PAID,
@@ -49,16 +51,21 @@ const ALLOWED_TRANSITIONS = {
     STATUS.AWAITING_PAYMENT,
     STATUS.REJECTED,
     STATUS.EXPIRED,
+    STATUS.SERVED,
   ],
   [STATUS.PAYMENT_FLAGGED]: [
     STATUS.PAID,
     STATUS.REJECTED,
     STATUS.AWAITING_PAYMENT,
     STATUS.VERIFYING_PAYMENT,
+    STATUS.SERVED,
   ],
   [STATUS.PAID]: [STATUS.SERVED, STATUS.REJECTED],
-  // Terminal.
-  [STATUS.SERVED]: [],
+  // Not fully terminal: an order served before payment cleared can still be
+  // reconciled once it does (see orderStore.markOrderServed and
+  // admin.js's handlePaymentAccept). Deliberately NOT reachable from REJECTED -
+  // rejecting restocks the items, which would be wrong for food already served.
+  [STATUS.SERVED]: [STATUS.PAID],
   [STATUS.REJECTED]: [],
   [STATUS.CANCELLED]: [],
   [STATUS.EXPIRED]: [],

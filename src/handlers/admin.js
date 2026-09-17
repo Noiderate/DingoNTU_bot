@@ -852,7 +852,10 @@ async function handlePaymentAccept(bot, query, chatId, userId, messageId, data) 
       return true;
     }
 
-    const payable = [STATUS.PAYMENT_FLAGGED, STATUS.AWAITING_PAYMENT, STATUS.VERIFYING_PAYMENT];
+    // SERVED is included so an order handed over before payment cleared
+    // (see orderStore.markOrderServed) can still be reconciled afterwards -
+    // this is the only way to ever mark such an order paid.
+    const payable = [STATUS.PAYMENT_FLAGGED, STATUS.AWAITING_PAYMENT, STATUS.VERIFYING_PAYMENT, STATUS.SERVED];
 
     if (!payable.includes(order.status)) {
       await bot.answerCallbackQuery(query.id, { text: `Order already ${order.status}`, show_alert: true });
@@ -1471,14 +1474,22 @@ async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
   try {
     const tagId = await getPreorderAdminTag();
     const tagUsername = tagId ? await getAdminUsernameById(bot, tagId) : null;
+    const contact = tagUsername ? `@${tagUsername}` : 'the admin';
 
-    await bot.sendMessage(
-      served.chatId,
-      `✅ Your order ${served.code} has been delivered/dropped off!\n\n`
-      + `For any issues, please contact ${tagUsername ? `@${tagUsername}` : 'the admin'}.`
-    );
+    const message = served.wasUnpaid
+      ? `✅ Your order ${served.code} has been served.\n\n`
+        + `⚠️ Payment for this order is still pending. Please complete it if you haven't, `
+        + `or contact ${contact} if you've already paid and this looks like a mistake.`
+      : `✅ Your order ${served.code} has been delivered/dropped off!\n\n`
+        + `For any issues, please contact ${contact}.`;
+
+    await bot.sendMessage(served.chatId, message);
   } catch (error) {
     log('warn', 'serve_notify_failed', { order_code: served.code, error: error.message });
+  }
+
+  if (served.wasUnpaid) {
+    await notifyAdminsServedUnpaid(bot, served);
   }
 
   // Drop just the served order's button, leaving the rest of the list usable.
@@ -1511,6 +1522,45 @@ async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
   await refreshDeliveryModeMenus(bot);
   await bot.answerCallbackQuery(query.id, { text: `Order ${served.code} marked as served.` });
   return true;
+}
+
+/**
+ * Tell admins a served order's payment still needs reconciling.
+ *
+ * If the order was already flagged, admins have an existing review card with
+ * working Accept/Reject buttons for it - this is a duplicate reminder for
+ * that case, harmless since whichever tap lands first wins. For an order
+ * that was simply awaiting/verifying payment (never flagged), this is the
+ * ONLY way to later mark it paid, so it deliberately reuses the same
+ * PAYMENT_ACCEPT_PREFIX callback handlePaymentAccept already handles.
+ *
+ * No Reject button: rejecting restocks the items, which would be wrong for
+ * food that has already been handed over.
+ */
+async function notifyAdminsServedUnpaid(bot, order) {
+  const caption = `🍽️ Order ${order.code} served before payment cleared\n`
+    + `👤 ${orderActions.describeCustomer(order)}\n`
+    + `🏢 Hall: ${order.hallName}\n`
+    + `💰 Amount due: ${formatCents(order.totalCents)}\n\n`
+    + `Mark it paid once payment is confirmed.`;
+
+  const keyboard = {
+    inline_keyboard: [[
+      { text: '✅ Mark Paid', callback_data: `${CALLBACKS.PAYMENT_ACCEPT_PREFIX}${order.id}` },
+    ]],
+  };
+
+  for (const adminId of getAdminIds()) {
+    try {
+      await bot.sendMessage(adminId, caption, { reply_markup: keyboard });
+    } catch (error) {
+      log('warn', 'served_unpaid_notify_failed', {
+        order_code: order.code,
+        admin_id: adminId,
+        error: error.message,
+      });
+    }
+  }
 }
 
 /**

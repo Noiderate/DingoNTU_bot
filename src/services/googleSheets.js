@@ -166,18 +166,31 @@ async function writeToSheet(range, values) {
  */
 async function readFromSheet(range) {
   try {
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range,
-    });
-
-    return response.data.values || [];
+    return await readFromSheetOrThrow(range);
   } catch (error) {
     console.error('Error reading from sheet:', error.message);
     return [];
   }
+}
+
+/**
+ * Like readFromSheet, but throws instead of returning [] on failure.
+ *
+ * readFromSheet's [] on error is indistinguishable from a genuinely empty
+ * range, which is fine for callers that treat both the same - but wrong for
+ * callers like sheetMirror.js's duplicate-row detection, where mistaking a
+ * transient read failure for "no existing row" causes a real duplicate to be
+ * appended.
+ */
+async function readFromSheetOrThrow(range) {
+  const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range,
+  });
+
+  return response.data.values || [];
 }
 
 /**
@@ -259,6 +272,25 @@ async function deleteAdmin(adminIdToDelete) {
 }
 
 /**
+ * Parse FoodAndStock!A2:C rows into food items.
+ *
+ * The row number is computed BEFORE filtering - a blank row anywhere in the
+ * middle must not shift every later item's id, or stock updates end up
+ * writing to the wrong physical row (see MAINTENANCE.md).
+ */
+function parseFoodItemRows(values) {
+  return values
+    .map((row, index) => ({ row, id: index + 2 })) // Row number (starting from 2)
+    .filter(({ row }) => row && row[0]) // Filter empty rows
+    .map(({ row, id }) => ({
+      id,
+      name: row[0] || '',
+      price: parseFloat(row[1]) || 0,
+      stock: parseFloat(row[2]) || 0,
+    }));
+}
+
+/**
  * Read all food items from FoodAndStock sheet
  */
 async function getFoodItems() {
@@ -271,17 +303,7 @@ async function getFoodItems() {
       range,
     });
 
-    const values = response.data.values || [];
-    
-    // Parse food items: Name, Price, Stock
-    return values
-      .filter(row => row && row[0]) // Filter empty rows
-      .map((row, index) => ({
-        id: index + 2, // Row number (starting from 2)
-        name: row[0] || '',
-        price: parseFloat(row[1]) || 0,
-        stock: parseFloat(row[2]) || 0,
-      }));
+    return parseFoodItemRows(response.data.values || []);
   } catch (error) {
     console.error('Error reading food items:', error.message);
     return [];
@@ -435,6 +457,21 @@ async function updateFoodItemStocksBatch(stockUpdates) {
 }
 
 /**
+ * Parse Hall!A2:B rows into halls. Row number computed before filtering -
+ * see parseFoodItemRows() above for why.
+ */
+function parseHallRows(values) {
+  return values
+    .map((row, index) => ({ row, id: index + 2 })) // Row number (starting from 2)
+    .filter(({ row }) => row && row[0]) // Filter empty rows
+    .map(({ row, id }) => ({
+      id,
+      name: row[0] || '',
+      shortName: row[1] || row[0] || '',
+    }));
+}
+
+/**
  * Read all halls from Hall sheet
  */
 async function getHalls() {
@@ -447,16 +484,7 @@ async function getHalls() {
       range,
     });
 
-    const values = response.data.values || [];
-    
-    // Parse hall names and short names
-    return values
-      .filter(row => row && row[0]) // Filter empty rows
-      .map((row, index) => ({
-        id: index + 2, // Row number (starting from 2)
-        name: row[0] || '',
-        shortName: row[1] || row[0] || '',
-      }));
+    return parseHallRows(response.data.values || []);
   } catch (error) {
     console.error('Error reading halls:', error.message);
     return [];
@@ -584,14 +612,17 @@ module.exports = {
   appendToSheet,
   writeToSheet,
   readFromSheet,
+  readFromSheetOrThrow,
   addAdmin,
   deleteAdmin,
   getFoodItems,
+  parseFoodItemRows,
   addFoodItem,
   deleteFoodItem,
   updateFoodItemStock,
   updateFoodItemStocksBatch,
   getHalls,
+  parseHallRows,
   addHall,
   deleteHall,
   getPreorderAdminTag,

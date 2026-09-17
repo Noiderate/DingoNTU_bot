@@ -1,4 +1,4 @@
-const { readFromSheet, writeToSheet, appendToSheet } = require('./googleSheets');
+const { readFromSheet, readFromSheetOrThrow, writeToSheet, appendToSheet } = require('./googleSheets');
 const { getSupabase, unwrap } = require('./supabase');
 const { getOrderById } = require('./orderRepository');
 const { formatSgt } = require('../utils/time');
@@ -156,19 +156,24 @@ function buildRow(order, submission) {
  * Reads the Order Code column rather than trusting the cache blindly, because
  * staff sorting or deleting rows would otherwise make us overwrite the wrong
  * order's row - a silent and very confusing corruption.
+ *
+ * Uses readFromSheetOrThrow, not readFromSheet: a transient read failure must
+ * propagate as an error, not be treated as "column is empty" - the latter
+ * would make syncOrder conclude the order has no row yet and append a
+ * duplicate for one that already exists.
  */
 async function findRowByOrderCode(orderCode) {
   const cached = rowCache.get(orderCode);
 
   if (cached) {
-    const check = await readFromSheet(`${SHEET}!${ORDER_CODE_COLUMN}${cached}`);
+    const check = await readFromSheetOrThrow(`${SHEET}!${ORDER_CODE_COLUMN}${cached}`);
     if (check[0] && check[0][0] === orderCode) {
       return cached;
     }
     rowCache.delete(orderCode);
   }
 
-  const column = await readFromSheet(`${SHEET}!${ORDER_CODE_COLUMN}2:${ORDER_CODE_COLUMN}`);
+  const column = await readFromSheetOrThrow(`${SHEET}!${ORDER_CODE_COLUMN}2:${ORDER_CODE_COLUMN}`);
 
   for (let index = 0; index < column.length; index += 1) {
     const value = column[index] && column[index][0];
@@ -201,10 +206,20 @@ async function syncOrder(orderId) {
 
   const existingRow = await findRowByOrderCode(order.order_code);
 
-  if (existingRow) {
-    await writeToSheet(`${SHEET}!A${existingRow}:${LAST_COLUMN}${existingRow}`, [values]);
-  } else {
-    await appendToSheet(SHEET, values);
+  // writeToSheet/appendToSheet swallow their own errors and return false
+  // rather than throw (see googleSheets.js). That must not be silently
+  // treated as success here: drainOutbox already retries with backoff and
+  // eventually flags orders.sheet_sync_error on a thrown failure - but only
+  // if this actually throws instead of falling through to mark it synced.
+  const written = existingRow
+    ? await writeToSheet(`${SHEET}!A${existingRow}:${LAST_COLUMN}${existingRow}`, [values])
+    : await appendToSheet(SHEET, values);
+
+  if (!written) {
+    throw new Error(`Failed to write order ${order.order_code} to the sheet`);
+  }
+
+  if (!existingRow) {
     // The appended row number is not returned, so drop the cache entry and let
     // the next lookup re-read the column.
     rowCache.delete(order.order_code);

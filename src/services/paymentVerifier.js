@@ -82,6 +82,34 @@ async function editProcessingMessage(bot, chatId, messageId, text, replyMarkup) 
   }
 }
 
+/**
+ * Delete the "please wait" (or "taking longer") message, best-effort.
+ *
+ * The message may already be gone (the customer deleted it) or too old for
+ * Telegram to remove - either is fine, since it's just tidying up, not the
+ * customer's only source of the outcome.
+ */
+async function deleteProcessingMessage(bot, chatId, messageId) {
+  if (!chatId || !messageId) {
+    return;
+  }
+
+  try {
+    await bot.deleteMessage(chatId, messageId);
+  } catch (error) {
+    log('warn', 'delete_processing_message_failed', { error: error.message });
+  }
+}
+
+/**
+ * Deliver a terminal outcome: delete the "please wait" message rather than
+ * editing it in place, and send the result as a fresh message instead.
+ */
+async function deliverOutcomeMessage(bot, chatId, messageId, text) {
+  await deleteProcessingMessage(bot, chatId, messageId);
+  return orderActions.notify(bot, chatId, text);
+}
+
 /** Send the slow notice at most once across all invocations of a job. */
 async function sendSlowNoticeOnce(bot, submission, chatId) {
   if (submission.slow_notice_sent_at) {
@@ -315,11 +343,12 @@ async function applyOutcome(bot, { order, submission, decision, patch }) {
     });
 
     if (paid) {
-      await editProcessingMessage(
-        bot, chatId, processingMessageId,
-        `✅ Payment received and verified for Order ${order.code}.\n\n`
-        + `${formatCents(order.totalCents)} confirmed. Your order is being prepared. 🍽️`
-      );
+      // markOrderPaid already sent the customer their one confirmation
+      // message (with the amount) - this just clears the "please wait" one
+      // rather than leaving it to edit-or-linger. Deleting here instead of
+      // deliverOutcomeMessage's delete-then-send avoids sending a second,
+      // redundant "payment confirmed" message on top of markOrderPaid's own.
+      await deleteProcessingMessage(bot, chatId, processingMessageId);
       // The admin's manual "Accept Payment" path refreshes this same menu -
       // auto-approval must too, or a paid order keeps showing "unpaid" in
       // delivery mode until an admin happens to navigate away and back.
@@ -340,7 +369,7 @@ async function applyOutcome(bot, { order, submission, decision, patch }) {
     // customer to finish an unfinished transfer now would contradict
     // whatever verdict they already received.
     if (reverted) {
-      await editProcessingMessage(bot, chatId, processingMessageId, MESSAGES.INCOMPLETE);
+      await deliverOutcomeMessage(bot, chatId, processingMessageId, MESSAGES.INCOMPLETE);
     }
 
     return { outcome: effectiveOutcome };
@@ -353,7 +382,7 @@ async function applyOutcome(bot, { order, submission, decision, patch }) {
     );
 
     if (reverted) {
-      await editProcessingMessage(bot, chatId, processingMessageId, MESSAGES.DUPLICATE);
+      await deliverOutcomeMessage(bot, chatId, processingMessageId, MESSAGES.DUPLICATE);
     }
 
     log('warn', 'duplicate_receipt', {
@@ -375,7 +404,7 @@ async function applyOutcome(bot, { order, submission, decision, patch }) {
   // order was already resolved elsewhere, so neither the customer nor admins
   // should hear about a flag that never actually took effect.
   if (flagged) {
-    await editProcessingMessage(bot, chatId, processingMessageId, MESSAGES.FLAGGED);
+    await deliverOutcomeMessage(bot, chatId, processingMessageId, MESSAGES.FLAGGED);
     await forwardToAdmins(bot, orderStore.toOrder(flagged), claim.submission, decision);
   }
 
@@ -605,7 +634,7 @@ async function handleTerminalFailure(bot, { order, submission, error }) {
     return { outcome: 'error', superseded: true };
   }
 
-  await editProcessingMessage(bot, order.chatId, submission.processing_message_id, MESSAGES.FLAGGED);
+  await deliverOutcomeMessage(bot, order.chatId, submission.processing_message_id, MESSAGES.FLAGGED);
 
   await forwardToAdmins(
     bot,
@@ -636,12 +665,14 @@ async function notifyClaimTimeDuplicate(bot, { submission, conflict }) {
 
   const order = orderStore.toOrder(orderRow);
 
-  await repo.transitionOrderStatus(
+  const reverted = await repo.transitionOrderStatus(
     order.id, STATUS.VERIFYING_PAYMENT, STATUS.AWAITING_PAYMENT,
     'ai_verifier', 'Duplicate receipt'
   );
 
-  await editProcessingMessage(bot, order.chatId, submission.processing_message_id, MESSAGES.DUPLICATE);
+  if (reverted) {
+    await deliverOutcomeMessage(bot, order.chatId, submission.processing_message_id, MESSAGES.DUPLICATE);
+  }
 
   log('warn', 'duplicate_receipt', {
     order_code: order.code,
