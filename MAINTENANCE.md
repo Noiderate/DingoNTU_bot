@@ -569,7 +569,7 @@ group by 1 order by 2 desc;
 
 - `RECIPIENT_MISMATCH` dominating → PayNow details changed, §3.10
 - `TIMESTAMP_*` dominating → clock or window settings, §3.11
-- `VERIFICATION_ERROR` dominating → Gemini is down, §3.7
+- `GEMINI_VERIFICATION_FAILURE` dominating → Gemini is down, §3.7
 - One bank dominating → layout change, §3.8
 
 ### The sheet is not updating

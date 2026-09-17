@@ -124,14 +124,14 @@ npm run webhook:info            # url set, pending 0, no last_error
       verify normally — check `payment_submissions.gemini_model` on the row to
       confirm it recorded the fallback model, not the primary. Set
       `GEMINI_FALLBACK_MODEL=` (empty) and repeat: the receipt should flag to
-      admins with `VERIFICATION_ERROR` instead, since there is nothing left to
-      fall back to.
+      admins with `GEMINI_VERIFICATION_FAILURE` instead, since there is nothing
+      left to fall back to.
 - [ ] **Killed mid-verification.** Set `WORKER_TIME_BUDGET_MS=1000` and send a
       receipt. The job releases itself back to `queued`, and the next
       `/api/cron/tick` finishes it. The customer still gets a verdict.
 - [ ] **Gemini unreachable.** Set an invalid `GEMINI_API_KEY`. Every receipt
-      flags to admins with `VERIFICATION_ERROR`; ordering keeps working; nothing
-      is auto-approved and nothing hangs.
+      flags to admins with `GEMINI_VERIFICATION_FAILURE`; ordering keeps
+      working; nothing is auto-approved and nothing hangs.
 - [ ] **Sheets unreachable.** Un-share the spreadsheet from the service account.
       **Ordering must still work.** Rows queue in `sheet_sync_outbox` and flush
       once access is restored.

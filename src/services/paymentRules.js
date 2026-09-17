@@ -41,7 +41,7 @@ const REASONS = {
   CROPPED: 'CROPPED',
   // Not produced by the rules themselves: set by the verifier when Gemini could
   // not be reached at all, so the receipt still reaches a human.
-  VERIFICATION_ERROR: 'VERIFICATION_ERROR',
+  GEMINI_VERIFICATION_FAILURE: 'GEMINI_VERIFICATION_FAILURE',
 };
 
 // Company-suffix noise that differs between banks for the same payee.

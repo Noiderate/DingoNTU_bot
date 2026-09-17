@@ -523,7 +523,7 @@ async function handleTerminalFailure(bot, { order, submission, error }) {
 
   await repo.updatePaymentSubmission(submission.id, {
     outcome: 'error',
-    outcome_reasons: [REASONS.VERIFICATION_ERROR],
+    outcome_reasons: [REASONS.GEMINI_VERIFICATION_FAILURE],
     last_error: error.message,
     completed_at: new Date().toISOString(),
     locked_by: null,
@@ -532,7 +532,7 @@ async function handleTerminalFailure(bot, { order, submission, error }) {
 
   const flagged = await repo.transitionOrderStatus(
     order.id, STATUS.VERIFYING_PAYMENT, STATUS.PAYMENT_FLAGGED,
-    'system', `Verification error: ${error.message}`
+    'system', `Gemini verification failure: ${error.message}`
   );
 
   await editProcessingMessage(bot, order.chatId, submission.processing_message_id, MESSAGES.FLAGGED);
@@ -541,7 +541,7 @@ async function handleTerminalFailure(bot, { order, submission, error }) {
     bot,
     flagged ? orderStore.toOrder(flagged) : order,
     submission,
-    { reasons: [REASONS.VERIFICATION_ERROR], normalized: {} }
+    { reasons: [REASONS.GEMINI_VERIFICATION_FAILURE], normalized: {} }
   );
 
   return { outcome: 'error' };

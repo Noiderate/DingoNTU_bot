@@ -608,7 +608,7 @@ Write this as a pure function that takes `(extraction, order, config, now, recei
 - **`incomplete_transfer`**: handled as described in §8.3.
 - **`duplicate_rejected`**: handled as described in §9.1.
 - **`error`** (verification permanently failed after retries or max duration)
-  - Treat it as `flagged` with reason `VERIFICATION_ERROR`, so a human reviews it.
+  - Treat it as `flagged` with reason `GEMINI_VERIFICATION_FAILURE`, so a human reviews it.
   - The customer sees the same "an admin will review it" message.
   - **Never silently fail an order.**
 - Customer-facing messages must never reveal internal rule details, thresholds, or the model name.
