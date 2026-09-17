@@ -79,6 +79,15 @@ const ACTIVE_STATUSES = [
   STATUS.PAID,
 ];
 
+/**
+ * Orders that genuinely represent food to be handed over at a hall - active
+ * ones plus already-served ones. Used to measure serve progress for the
+ * automatic get-ready/coming triggers: an order still pending admin
+ * confirmation was never committed to, and a rejected/cancelled/expired one
+ * never happened, so neither belongs in that denominator.
+ */
+const SERVABLE_STATUSES = [...ACTIVE_STATUSES, STATUS.SERVED];
+
 // Customer is joined in because nearly every consumer needs the Telegram
 // handle to address or label the order.
 const ORDER_SELECT = '*, order_items(*), customers(*)';
@@ -394,6 +403,27 @@ async function getOrderAwaitingPaymentFor(telegramUserId) {
   );
 
   return rows[0] || null;
+}
+
+/**
+ * The orders that count toward a hall's serve progress tonight: created
+ * within the given window and in a status that represents real food (see
+ * SERVABLE_STATUSES). Only status is selected - this drives a threshold
+ * calculation, not a display, so the fuller ORDER_SELECT join is unneeded.
+ */
+async function getOrdersForHallServeProgress(hallName, startIso, endIso) {
+  const supabase = getSupabase();
+
+  return unwrap(
+    await supabase
+      .from('orders')
+      .select('status')
+      .eq('hall_name_snapshot', hallName)
+      .gte('created_at', startIso)
+      .lt('created_at', endIso)
+      .in('status', SERVABLE_STATUSES),
+    'getOrdersForHallServeProgress'
+  );
 }
 
 /** Orders whose payment window has elapsed, for the expiry sweeper. */
@@ -777,6 +807,7 @@ async function createReceiptSignedUrl(storagePath, expiresInSeconds = 600) {
 module.exports = {
   STATUS,
   ACTIVE_STATUSES,
+  SERVABLE_STATUSES,
   ALLOWED_TRANSITIONS,
 
   upsertCustomer,
@@ -789,6 +820,7 @@ module.exports = {
   recordStatusHistory,
   getActiveOrders,
   getActiveOrdersByHall,
+  getOrdersForHallServeProgress,
   getOrdersForCustomer,
   getOrderAwaitingPaymentFor,
   getExpiredUnpaidOrders,

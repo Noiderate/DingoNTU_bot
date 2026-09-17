@@ -207,31 +207,24 @@ function backToHallsKeyboard() {
   };
 }
 
+// get-ready and coming now post automatically off hall serve progress; only
+// these two stages still need an admin tap.
+const MANUALLY_POSTED_MODES = ['preorder', 'here'];
+
 /**
  * Delivery mode menu keyboard
  */
-function deliveryModeKeyboard(nextHallToPost, nextHallToPostMode, nextHallToBlock, lastBlockedHall, allHallsBlocked) {
+function deliveryModeKeyboard(nextHallToPost, nextHallToPostMode, lastBlockedHall, allHallsBlocked) {
   const buttons = [];
 
-  if (nextHallToPost) {
+  if (nextHallToPost && MANUALLY_POSTED_MODES.includes(nextHallToPostMode)) {
     const postText = nextHallToPostMode === 'preorder'
       ? `Post preorder available message   `
-      : nextHallToPostMode === 'get-ready'
-      ? `Post in Dingo Channel: Get ready, ${nextHallToPost.shortName || nextHallToPost.name}   `
-      : nextHallToPostMode === 'here'
-      ? `Post in Dingo Channel: ${nextHallToPost.shortName || nextHallToPost.name}, we are here   `
-      : `Post in Dingo Channel: ${nextHallToPost.shortName || nextHallToPost.name}, we are coming   `;
+      : `Post in Dingo Channel: ${nextHallToPost.shortName || nextHallToPost.name}, we are here   `;
 
     buttons.push([{
       text: postText,
       callback_data: `${CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX}${nextHallToPostMode}:${nextHallToPost.id}`,
-    }]);
-  }
-
-  if (nextHallToBlock) {
-    buttons.push([{
-      text: `⛔ Block Hall ${nextHallToBlock.name}`,
-      callback_data: `${CALLBACKS.DELIVERY_MODE_BLOCK_HALL_PREFIX}${nextHallToBlock.id}`,
     }]);
   }
 

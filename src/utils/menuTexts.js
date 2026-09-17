@@ -157,9 +157,27 @@ function deleteHallSelectText() {
 }
 
 /**
+ * The get-ready/coming posts are automatic now, so there is no button to tap
+ * while one is pending - this line is what tells the admin the menu isn't
+ * stuck, and how close it is.
+ */
+function gatingStageLine({ mode, gatingHall, gatingProgress } = {}) {
+  if (!gatingHall || !gatingProgress) {
+    return null;
+  }
+
+  const label = mode === 'get-ready' ? 'Get ready' : 'we are coming';
+  const target = mode === 'get-ready' ? '2/3' : 'all';
+  const { served, total } = gatingProgress;
+
+  return `⏳ Auto-posting "${label}" for the next hall once ${target} of `
+    + `${gatingHall.name} is served (${served}/${total} so far).`;
+}
+
+/**
  * Delivery mode menu text — lists halls with orders grouped underneath
  */
-function deliveryModeText(halls, orders, foodItems = []) {
+function deliveryModeText(halls, orders, foodItems = [], stage = {}) {
   const remainingStockItems = (foodItems || []).filter(item => (item.stock || 0) > 0);
   let stockSection = '📦 Remaining Stock\n';
 
@@ -171,8 +189,11 @@ function deliveryModeText(halls, orders, foodItems = []) {
     });
   }
 
+  const gatingLine = gatingStageLine(stage);
+  const sections = [stockSection, ...(gatingLine ? [gatingLine] : [])];
+
   if (halls.length === 0) {
-    return `🚚 Delivery Mode\n\n${stockSection}\n\nNo halls available.`;
+    return `🚚 Delivery Mode\n\n${sections.join('\n\n')}\n\nNo halls available.`;
   }
 
   const hallsWithOrders = halls
@@ -183,10 +204,10 @@ function deliveryModeText(halls, orders, foodItems = []) {
     .filter(({ hallOrders }) => hallOrders.length > 0);
 
   if (hallsWithOrders.length === 0) {
-    return `🚚 Delivery Mode\n\n${stockSection}\n\nNo active orders.`;
+    return `🚚 Delivery Mode\n\n${sections.join('\n\n')}\n\nNo active orders.`;
   }
 
-  const sections = hallsWithOrders.map(({ hall, hallOrders }) => {
+  const hallSections = hallsWithOrders.map(({ hall, hallOrders }) => {
     let section = `🏢 ${hall.name}`;
 
     hallOrders.forEach(order => {
@@ -203,7 +224,7 @@ function deliveryModeText(halls, orders, foodItems = []) {
     return section;
   });
 
-  return `🚚 Delivery Mode\n\n${stockSection}\n\n${sections.join('\n\n\n')}`;
+  return `🚚 Delivery Mode\n\n${sections.join('\n\n')}\n\n${hallSections.join('\n\n\n')}`;
 }
 
 /**

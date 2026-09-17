@@ -42,7 +42,6 @@ const CALLBACKS = {
   // Delivery mode
   SETTINGS_DELIVERY_MODE: 'settings_delivery_mode',
   DELIVERY_MODE_BACK: 'delivery_mode_back',
-  DELIVERY_MODE_BLOCK_HALL_PREFIX: 'delivery_mode_block_hall_',
   DELIVERY_MODE_POST_CHANNEL_PREFIX: 'delivery_mode_post_channel_',
   DELIVERY_MODE_SERVE_ORDER_PREFIX: 'delivery_mode_serve_order_',
   DELIVERY_MODE_REVERT_BLOCK: 'delivery_mode_revert_block',

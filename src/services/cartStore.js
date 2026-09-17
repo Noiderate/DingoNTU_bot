@@ -116,6 +116,28 @@ async function clearItems(telegramUserId) {
   return saveCart(telegramUserId, cart);
 }
 
+/**
+ * Every open cart currently pointed at a hall - the customers who picked it
+ * but haven't confirmed an order yet, i.e. don't have a real order in
+ * Supabase to protect. Used to notify and clear out anyone caught mid-browse
+ * when that hall's ordering window closes.
+ */
+async function getCartsForHall(hallName) {
+  const supabase = getSupabase();
+  const nowIso = new Date().toISOString();
+
+  const rows = unwrap(
+    await supabase
+      .from('carts')
+      .select('telegram_user_id')
+      .eq('hall_name', hallName)
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`),
+    'cartStore.getCartsForHall'
+  );
+
+  return rows.map(row => row.telegram_user_id);
+}
+
 async function clearCart(telegramUserId) {
   const supabase = getSupabase();
 
@@ -178,6 +200,7 @@ module.exports = {
   getQuantity,
   clearItems,
   clearCart,
+  getCartsForHall,
   cartEntries,
   isEmpty,
   findCartMismatch,

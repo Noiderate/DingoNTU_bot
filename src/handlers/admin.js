@@ -13,6 +13,7 @@ const orderStore = require('../services/orderStore');
 const orderActions = require('../services/orderActions');
 const repo = require('../services/orderRepository');
 const stateStore = require('../services/stateStore');
+const cartStore = require('../services/cartStore');
 const paynowQr = require('../services/paynowQr');
 const { getMenuMessageId, setMenuMessageId, clearMenuMessageId } = require('../services/chatTracker');
 const { config } = require('../config');
@@ -21,6 +22,7 @@ const { log } = require('../utils/logger');
 const {
   advanceNextHallToPost,
   isExpectedNextHallToPost,
+  getNextHallToPostState,
   recordDingoPost,
   getDingoMsgIdsToDelete,
   consumeTrackedDingoMessageIds,
@@ -1281,26 +1283,6 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     return handleDeliveryPost(bot, query, chatId, userId, data);
   }
 
-  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_BLOCK_HALL_PREFIX)) {
-    const hallId = Number.parseInt(extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_BLOCK_HALL_PREFIX), 10);
-    const hall = (await getHalls()).find(entry => entry.id === hallId);
-
-    if (!hall) {
-      await answer('Hall not found', { show_alert: true });
-      return true;
-    }
-
-    if (!await orderStore.blockHall(hall.name, userId)) {
-      await answer(`${hall.name} is already blocked`, { show_alert: true });
-      return true;
-    }
-
-    await refreshPreorderPost(bot);
-    await refreshDeliveryModeMenus(bot);
-    await answer(`Blocked ${hall.name}`);
-    return true;
-  }
-
   if (data === CALLBACKS.DELIVERY_MODE_REVERT_BLOCK) {
     const currentMenuId = await getMenuMessageId(userId);
 
@@ -1342,42 +1324,102 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   return false;
 }
 
-async function handleDeliveryPost(bot, query, chatId, userId, data) {
-  const [postMode, hallIdValue] = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX).split(':');
-  const hallId = Number.parseInt(hallIdValue, 10);
+// --- Delivery automation: hall serve progress drives get-ready/coming ------
 
+// "2/3 of the current hall served" fires the next hall's get-ready post;
+// fully served fires its coming post (and closes its ordering - see
+// blockHallForAutoClosure).
+const GET_READY_THRESHOLD = 2 / 3;
+
+function meetsAutoPostThreshold(mode, fraction) {
+  if (mode === 'get-ready') return fraction >= GET_READY_THRESHOLD;
+  if (mode === 'coming') return fraction >= 1;
+  return false;
+}
+
+/**
+ * DM every customer with a still-active order at this hall. Best-effort per
+ * customer - one blocked bot must not stop the rest from being notified.
+ */
+async function notifyHallCustomers(bot, hallName, text) {
+  const hallOrders = await orderStore.getActiveOrdersByHall(hallName);
+  const chatIds = new Set(hallOrders.map(order => order.chatId).filter(Boolean));
+
+  for (const chatId of chatIds) {
+    await orderActions.notify(bot, chatId, text);
+  }
+}
+
+/**
+ * Clear out anyone who picked this hall but never confirmed an order - they
+ * have nothing in Supabase to protect, just an open cart. Customers already
+ * mid-payment are untouched: hall blocking only stops NEW carts/orders (see
+ * showOrderScreen in handlers/user.js), it was never going to touch theirs.
+ */
+async function kickOpenCartsForHall(bot, hallName) {
+  const telegramUserIds = await cartStore.getCartsForHall(hallName);
+
+  for (const telegramUserId of telegramUserIds) {
+    await cartStore.clearCart(telegramUserId);
+    await orderActions.notify(
+      bot,
+      telegramUserId,
+      `⛔ Ordering for ${hallName} has just closed - the delivery is on its way and there's no more time `
+      + `to prepare new orders. Your cart has been cleared.\n\nSorry about that! Watch out for the next preorder.`
+    );
+  }
+}
+
+/**
+ * Close a hall's ordering the moment the "we are coming" post for it goes
+ * out (whether that post was manual or automatic), and clear out anyone
+ * caught mid-browse. A no-op if the hall was already blocked - the
+ * last-hall-of-the-night wraparound (see autoAdvanceDeliveryStage) can hand
+ * this an already-blocked hall, and there is nothing further to do for it.
+ */
+async function blockHallForAutoClosure(bot, hall) {
+  const newlyBlocked = await orderStore.blockHall(hall.name);
+
+  if (!newlyBlocked) {
+    return;
+  }
+
+  await kickOpenCartsForHall(bot, hall.name);
+  await refreshPreorderPost(bot);
+}
+
+/**
+ * Core channel-post + sequencer-advance logic, shared by the manual admin tap
+ * (preorder/here) and the automatic get-ready/coming triggers fired by serve
+ * progress. Never throws for an expected failure (stale button, missing
+ * channel, a Telegram send error) - callers decide how to surface that.
+ */
+async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
   let holder = null;
 
   try {
     holder = await stateStore.acquireLock(stateStore.LOCKS.deliveryPost(), { leaseMs: 30000 });
 
     if (!holder) {
-      await bot.answerCallbackQuery(query.id, { text: 'A delivery update is already being posted.' });
-      return true;
+      return { posted: false, reason: 'locked' };
     }
 
     const halls = await getHalls();
     const hall = halls.find(entry => entry.id === hallId);
 
     if (!hall || !['preorder', 'coming', 'here', 'get-ready'].includes(postMode)) {
-      await bot.answerCallbackQuery(query.id, { text: 'Hall not found', show_alert: true });
-      return true;
+      return { posted: false, reason: 'hall_not_found' };
     }
 
     if (!await isExpectedNextHallToPost(halls, hallId, postMode)) {
       await refreshDeliveryModeMenus(bot);
-      await bot.answerCallbackQuery(
-        query.id,
-        { text: 'This button is outdated. Please use the latest delivery menu.', show_alert: true }
-      );
-      return true;
+      return { posted: false, reason: 'stale' };
     }
 
     const channelId = config.telegram.dingoChannelId;
 
     if (!channelId) {
-      await bot.answerCallbackQuery(query.id, { text: 'DINGO_CHANNEL_ID is not set in the environment.', show_alert: true });
-      return true;
+      return { posted: false, reason: 'no_channel' };
     }
 
     const hallLabel = hall.shortName || hall.name;
@@ -1410,11 +1452,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
       sent = await bot.sendMessage(channelId, text, options);
     } catch (error) {
       log('error', 'dingo_post_failed', { hall: hallLabel, error: error.message });
-      await bot.answerCallbackQuery(
-        query.id,
-        { text: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.', show_alert: true }
-      );
-      return true;
+      return { posted: false, reason: 'send_failed' };
     }
 
     const toDelete = await getDingoMsgIdsToDelete(postMode);
@@ -1436,29 +1474,116 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
     await advanceNextHallToPost(halls, hallId, postMode);
     await refreshDeliveryModeMenus(bot);
 
-    if (postMode === 'here') {
+    if (postMode === 'here' && notifyChatId) {
       const hallOrders = await orderStore.getActiveOrdersByHall(hall.name);
 
       if (hallOrders.length > 0) {
         const serveMsg = await bot.sendMessage(
-          chatId,
+          notifyChatId,
           `✅ ${hallLabel}, we are here\n\nTap each order when served:`,
           { reply_markup: buildHallServeOrdersKeyboard(hallOrders) }
         );
-        await recordHallServeMessage(hall.name, chatId, serveMsg.message_id);
+        await recordHallServeMessage(hall.name, notifyChatId, serveMsg.message_id);
       }
+    } else if (postMode === 'get-ready') {
+      await notifyHallCustomers(
+        bot,
+        hall.name,
+        `🔔 Get ready! The delivery is finishing up the current hall and ${hallLabel} is next. `
+        + `Start heading down soon.`
+      );
+    } else if (postMode === 'coming') {
+      await blockHallForAutoClosure(bot, hall);
+      await notifyHallCustomers(
+        bot,
+        hall.name,
+        `🚚 We're on our way to ${hallLabel} now! Come down and collect your order.`
+      );
     }
 
-    await bot.answerCallbackQuery(
-      query.id,
-      { text: postMode === 'preorder' ? 'Posted preorder availability to Dingo channel.' : `Posted to Dingo channel: ${text}` }
-    );
-    return true;
+    return { posted: true, text, hall, hallLabel };
   } finally {
     if (holder) {
       await stateStore.releaseLock(stateStore.LOCKS.deliveryPost(), holder);
     }
   }
+}
+
+/**
+ * Fire whatever get-ready/coming posts a hall's serve progress now justifies.
+ *
+ * Called after every "mark as served" tap, and once right after a "here"
+ * post goes out (covering a hall nobody ordered from, whose progress is
+ * trivially already 100%). Loops because a hall with very few orders can
+ * cross both the 2/3 and 100% thresholds in one tap - without the loop that
+ * would post get-ready and then sit waiting for a "mark served" that will
+ * never come, since everything is already served.
+ *
+ * Skips the LAST hall in the list entirely: the sequencer wraps its "next
+ * hall" back to the first hall once the last hall's "here" has posted, which
+ * is the sign the round is over, not a genuine next hall to warn or block.
+ * The admin ends the night with "Finish Delivery" instead.
+ */
+async function autoAdvanceDeliveryStage(bot, hallName) {
+  const halls = await getHalls();
+  const hallIndex = halls.findIndex(hall => hall.name === hallName);
+
+  if (hallIndex === -1 || hallIndex === halls.length - 1) {
+    return;
+  }
+
+  const progress = await orderStore.getHallServeProgress(hallName);
+
+  for (let guard = 0; guard < 3; guard += 1) {
+    const { hall: nextHall, mode } = await getNextHallToPostState(halls);
+
+    if (!nextHall || !meetsAutoPostThreshold(mode, progress.fraction)) {
+      return;
+    }
+
+    const result = await postDingoUpdate(bot, { hallId: nextHall.id, postMode: mode });
+
+    if (!result.posted) {
+      // Most likely 'locked' (a concurrent tap/tick got there first) or
+      // 'stale' (someone else already advanced past this). Either way,
+      // nothing more for this call to do.
+      return;
+    }
+  }
+}
+
+async function handleDeliveryPost(bot, query, chatId, userId, data) {
+  const [postMode, hallIdValue] = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX).split(':');
+  const hallId = Number.parseInt(hallIdValue, 10);
+
+  const result = await postDingoUpdate(bot, { hallId, postMode, notifyChatId: chatId });
+
+  if (!result.posted) {
+    const FAILURE_RESPONSES = {
+      locked: { text: 'A delivery update is already being posted.' },
+      hall_not_found: { text: 'Hall not found', show_alert: true },
+      stale: { text: 'This button is outdated. Please use the latest delivery menu.', show_alert: true },
+      no_channel: { text: 'DINGO_CHANNEL_ID is not set in the environment.', show_alert: true },
+      send_failed: { text: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.', show_alert: true },
+    };
+
+    await bot.answerCallbackQuery(query.id, FAILURE_RESPONSES[result.reason] || { text: 'Could not post update.', show_alert: true });
+    return true;
+  }
+
+  await bot.answerCallbackQuery(
+    query.id,
+    { text: postMode === 'preorder' ? 'Posted preorder availability to Dingo channel.' : `Posted to Dingo channel: ${result.text}` }
+  );
+
+  if (postMode === 'here') {
+    // The lock from the post above is already released by now, so this is
+    // free to take it again for whatever it posts (e.g. a hall nobody
+    // ordered from, whose get-ready/coming can fire immediately).
+    await autoAdvanceDeliveryStage(bot, result.hall.name);
+  }
+
+  return true;
 }
 
 async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
@@ -1491,6 +1616,10 @@ async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
   if (served.wasUnpaid) {
     await notifyAdminsServedUnpaid(bot, served);
   }
+
+  // This is the main trigger for get-ready/coming: check whether the hall
+  // just crossed a serve-progress threshold now that one more order is done.
+  await autoAdvanceDeliveryStage(bot, served.hallName);
 
   // Drop just the served order's button, leaving the rest of the list usable.
   const rows = (query.message.reply_markup && query.message.reply_markup.inline_keyboard) || [];
@@ -1645,4 +1774,12 @@ module.exports = {
   getAdminState,
   setAdminState,
   clearAdminState,
+
+  GET_READY_THRESHOLD,
+  meetsAutoPostThreshold,
+  notifyHallCustomers,
+  kickOpenCartsForHall,
+  blockHallForAutoClosure,
+  postDingoUpdate,
+  autoAdvanceDeliveryStage,
 };

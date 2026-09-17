@@ -140,6 +140,25 @@ async function isExpectedNextHallToPost(halls, hallId, mode) {
 }
 
 /**
+ * The hall whose serve progress gates the pending post, when that post is
+ * 'get-ready' or 'coming' - both fired automatically now, off that hall
+ * reaching a serve-progress threshold. Null for 'preorder'/'here', which stay
+ * manual and have no such dependency, so the admin menu knows when there's
+ * simply nothing to show a countdown for.
+ */
+async function getGatingHall(halls) {
+  const sequencer = await getSequencer();
+
+  if (!halls.length || !['get-ready', 'coming'].includes(sequencer.mode)) {
+    return null;
+  }
+
+  const index = sequencer.index % halls.length;
+  const gatingIndex = (index - 1 + halls.length) % halls.length;
+  return halls[gatingIndex];
+}
+
+/**
  * Advance the sequencer after a successful post.
  *
  * The cycle per hall is preorder -> coming -> here, then get-ready for the next
@@ -190,18 +209,19 @@ async function getDeliveryModeView() {
   const blocked = await orderStore.loadBlockedHalls();
 
   const { hall: nextHallToPost, mode } = await getNextHallToPostState(halls);
-  const nextHallToBlock = halls.find(hall => !blocked.isBlocked(hall.name)) || null;
   const allHallsBlocked = halls.length > 0 && halls.every(hall => blocked.isBlocked(hall.name));
 
+  const gatingHall = await getGatingHall(halls);
+  const gatingProgress = gatingHall ? await orderStore.getHallServeProgress(gatingHall.name) : null;
+
   return {
-    text: menuTexts.deliveryModeText(halls, orders, foodItems),
-    keyboard: keyboards.deliveryModeKeyboard(
+    text: menuTexts.deliveryModeText(halls, orders, foodItems, {
       nextHallToPost,
       mode,
-      nextHallToBlock,
-      blocked.last,
-      allHallsBlocked
-    ),
+      gatingHall,
+      gatingProgress,
+    }),
+    keyboard: keyboards.deliveryModeKeyboard(nextHallToPost, mode, blocked.last, allHallsBlocked),
   };
 }
 
@@ -304,6 +324,7 @@ module.exports = {
   advanceNextHallToPost,
   isExpectedNextHallToPost,
   getNextHallToPostState,
+  getGatingHall,
   recordDingoPost,
   getDingoMsgIdsToDelete,
   consumeTrackedDingoMessageIds,
