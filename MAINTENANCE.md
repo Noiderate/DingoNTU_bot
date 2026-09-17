@@ -192,15 +192,24 @@ deploy competes with production for the same updates.
 When `PAYNOW_UEN` or `PAYNOW_PROXY_NUMBER` is configured, `sendPaymentInstructions()`
 in `src/handlers/admin.js` generates a PayNow QR per order (via
 `src/services/paynowQr.js`) with the exact amount and order code baked in, and
-sends it together with the example screenshot as one Telegram album
-(`sendMediaGroup`). This QR is never cached — the amount differs per order.
+tries to send it together with the example screenshot as one Telegram album
+(`sendMediaGroup`) so the customer swipes between them. This QR is never
+cached — the amount differs per order.
 
-If neither is configured, or Telegram rejects the album, it falls back to the
-static image flow: `vercel.json` has `includeFiles: "src/Payment_Instruction.*"`,
-and after the first successful send the Telegram `file_id` is cached in
-`bot_state` under `cache:payment_image_file_id` so the local file stops
-mattering. If no image can be sent at all, the caption is still sent as plain
-text so the customer always learns the amount.
+The fallback chain, each step only reached if the one before it fails:
+1. Dynamic QR + example, as one album.
+2. Dynamic QR alone (`sendPhoto`), with the example attempted separately and
+   best-effort — a broken example image must never cost the customer their QR.
+3. The configured static QR image sources, each retried the same way (album
+   first, then alone). `vercel.json` has `includeFiles: "src/Payment_Instruction.*"`,
+   and after the first successful send the Telegram `file_id` is cached in
+   `bot_state` under `cache:payment_image_file_id` so the local file stops
+   mattering.
+4. Plain text with the amount, if no image could be sent at all.
+
+A stale cached example `file_id` is retried once with a fresh upload of
+`src/payment_example.png` before a QR candidate is given up on, so a bad
+example cache entry alone can't sink delivery either.
 
 ### 3.2 Stale or stuck state
 

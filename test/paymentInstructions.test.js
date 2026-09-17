@@ -9,40 +9,81 @@ const order = {
   items: [{ name: 'Rice', quantity: 1, lineTotalCents: 500 }],
 };
 
-test('payment image includes the order summary and requested PayNow wording, followed by an example screenshot', async t => {
+test('the QR and the example screenshot ship together as one swipeable gallery', async t => {
   t.mock.method(stateStore, 'get', async () => 'cached-image');
-  const photos = [];
+  const groups = [];
   const bot = {
-    async sendPhoto(...args) { photos.push(args); return {}; },
+    async sendMediaGroup(chatId, media) { groups.push({ chatId, media }); return [{}, {}]; },
+    async sendPhoto() { assert.fail('Must send one gallery, not separate photos'); },
     async sendMessage() { assert.fail('Must not send a separate text message'); },
   };
   await sendPaymentInstructions(bot, order);
-  assert.equal(photos.length, 2);
-  assert.match(photos[0][2].caption, /Rice x1/);
-  assert.match(photos[0][2].caption, /Please use PayNow to pay using the QR above\./);
-  assert.match(photos[0][2].caption, /DG20260916-1/);
-  assert.match(photos[1][2].caption, /Example of a valid screenshot/);
+
+  assert.equal(groups.length, 1);
+  const { chatId, media } = groups[0];
+  assert.equal(chatId, order.chatId);
+  assert.equal(media.length, 2);
+  assert.equal(media[0].media, 'cached-image');
+  assert.match(media[0].caption, /Rice x1/);
+  assert.match(media[0].caption, /Please use PayNow to pay using the QR above\./);
+  assert.match(media[0].caption, /DG20260916-1/);
+  assert.match(media[1].caption, /Example of a valid screenshot/);
 });
 
-test('stale cached image retries the configured QR and example; cache write failure does not duplicate delivery', async t => {
+test('a stale cached QR retries the configured static image, still as one gallery', async t => {
   const previous = config.telegram.paymentInstructionImage;
   config.telegram.paymentInstructionImage = 'src/dingo_qr_code.png';
   t.after(() => { config.telegram.paymentInstructionImage = previous; });
-  t.mock.method(stateStore, 'get', async () => 'stale-image');
+  // Only the QR's own cache is stale - keep the example cache empty so this
+  // test isn't also exercising the example's own retry-on-stale-cache path.
+  t.mock.method(stateStore, 'get', async key => (key === stateStore.KEYS.paymentImageFileId() ? 'stale-image' : null));
   t.mock.method(stateStore, 'set', async () => { throw new Error('Cache unavailable'); });
-  const sources = [];
+
+  const attempts = [];
   const bot = {
-    async sendPhoto(chatId, source) {
-      sources.push(source);
-      if (source === 'stale-image') throw new Error('Invalid file ID');
-      assert(require('fs').existsSync(source));
-      return { photo: [{ file_id: 'fresh-image' }] };
+    async sendMediaGroup(chatId, media) {
+      attempts.push(media[0].media);
+      if (media[0].media === 'stale-image') throw new Error('Invalid file ID');
+      assert(require('fs').existsSync(media[0].media));
+      return [{ photo: [{ file_id: 'fresh-qr' }] }, { photo: [{ file_id: 'fresh-example' }] }];
     },
+    async sendPhoto() { assert.fail('Must send one gallery, not separate photos'); },
     async sendMessage() { assert.fail('Photo already delivered'); },
   };
+
   await sendPaymentInstructions(bot, order);
-  // One stale + one fresh attempt for the QR, then the same pair for the example.
-  assert.equal(sources.length, 4);
+  // One failed attempt with the stale cached source, one successful attempt
+  // with the configured static image.
+  assert.equal(attempts.length, 2);
+});
+
+test('a stale cached example is retried with a fresh upload before giving up on the QR', async t => {
+  const previousUen = config.payment.uen;
+  config.payment.uen = 'T12LL1234K';
+  t.after(() => { config.payment.uen = previousUen; });
+  // Every stateStore.get call returns this - it stands in for a stale cached
+  // example file_id (the QR itself is never cached, so this only affects the
+  // example lookup in practice).
+  t.mock.method(stateStore, 'get', async () => 'stale-example');
+  const setCalls = [];
+  t.mock.method(stateStore, 'set', async (key, value) => { setCalls.push({ key, value }); });
+
+  const attempts = [];
+  const bot = {
+    async sendMediaGroup(chatId, media) {
+      attempts.push(media[1].media);
+      if (media[1].media === 'stale-example') throw new Error('Invalid file ID');
+      assert(require('fs').existsSync(media[1].media));
+      return [{}, { photo: [{ file_id: 'fresh-example' }] }];
+    },
+    async sendPhoto() { assert.fail('Must send one gallery, not separate photos'); },
+    async sendMessage() { assert.fail('Must not send a separate text message'); },
+  };
+
+  await sendPaymentInstructions(bot, order);
+
+  assert.equal(attempts.length, 2); // stale example, then a fresh upload of the same QR
+  assert.ok(setCalls.some(({ value }) => value === 'fresh-example'));
 });
 
 test('when a PayNow UEN is configured, the QR and example ship together as one album', async t => {
@@ -73,11 +114,13 @@ test('when a PayNow UEN is configured, the QR and example ship together as one a
   assert.match(media[1].caption, /Example of a valid screenshot/);
 });
 
-test('falls back to the legacy flow when the album send itself fails', async t => {
+test('a broken example never costs the customer their QR: falls back to a lone photo plus a best-effort example', async t => {
   const previousUen = config.payment.uen;
   config.payment.uen = 'T12LL1234K';
   t.after(() => { config.payment.uen = previousUen; });
-  t.mock.method(stateStore, 'get', async () => 'cached-image');
+  t.mock.method(stateStore, 'get', async () => null);
+  t.mock.method(stateStore, 'set', async () => {});
+
   const photos = [];
   const bot = {
     async sendMediaGroup() { throw new Error('Telegram rejected the album'); },
@@ -87,8 +130,12 @@ test('falls back to the legacy flow when the album send itself fails', async t =
 
   await sendPaymentInstructions(bot, order);
 
+  // The QR goes out on its own first, then the example is attempted
+  // separately and best-effort.
   assert.equal(photos.length, 2);
+  assert.ok(Buffer.isBuffer(photos[0][1]));
   assert.match(photos[0][2].caption, /Please use PayNow to pay using the QR above\./);
+  assert.match(photos[1][2].caption, /Example of a valid screenshot/);
 });
 
 test('large orders fit a photo caption while keeping payment instructions and total', () => {

@@ -589,8 +589,7 @@ async function buildExampleMedia() {
   };
 }
 
-async function cacheExampleFileId(sentMessages) {
-  const examplePhoto = sentMessages?.[1]?.photo;
+async function cacheExampleFileId(examplePhoto) {
   if (!examplePhoto?.length) {
     return;
   }
@@ -605,37 +604,108 @@ async function cacheExampleFileId(sentMessages) {
   }
 }
 
-/**
- * Send a two-photo album, logging and returning null instead of throwing so
- * the caller can fall back to the next candidate QR source.
- */
-async function trySendGallery(bot, order, media, logEvent) {
+async function cacheQrFileId(qrPhoto) {
+  if (!qrPhoto?.length) {
+    return;
+  }
   try {
-    return await bot.sendMediaGroup(order.chatId, media);
+    await stateStore.set(
+      stateStore.KEYS.paymentImageFileId(),
+      qrPhoto[qrPhoto.length - 1].file_id,
+      { ttlMs: 30 * 24 * 60 * 60 * 1000 }
+    );
   } catch (error) {
-    log('warn', logEvent, { order_code: order.code, error: error.message });
-    return null;
+    log('warn', 'payment_image_cache_write_failed', { error: error.message });
   }
 }
 
 /**
- * Send the QR and the example screenshot as one album, always - never as two
- * separate messages - so the customer swipes between them in the same
- * gallery. Prefers the per-order dynamic PayNow QR; if that can't be built or
- * Telegram rejects it, falls back through the configured static QR image
- * sources, still paired with the example in one album each attempt.
+ * Send one QR candidate paired with the example as a two-photo album.
+ *
+ * If a cached example file_id is what Telegram rejected, retries once with a
+ * fresh upload of the local example file before giving up on this QR - a
+ * stale example reference must never be the reason the customer loses the
+ * payment QR too.
+ *
+ * Returns the two sent messages on success (and caches any freshly uploaded
+ * example file_id) so the caller can still cache the QR's own file_id.
+ * Returns null without throwing so the caller can fall back further.
+ */
+async function sendGalleryAttempt(bot, order, qrMedia, exampleState, logEvent) {
+  let example = exampleState;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let sent;
+    try {
+      sent = await bot.sendMediaGroup(order.chatId, [qrMedia, example.item]);
+    } catch (error) {
+      log('warn', logEvent, { order_code: order.code, error: error.message });
+
+      if (attempt === 0 && example.cached) {
+        example = {
+          item: { ...example.item, media: resolveImageSource(PAYMENT_EXAMPLE_IMAGE) },
+          cached: false,
+        };
+        continue;
+      }
+
+      return null;
+    }
+
+    if (!example.cached) {
+      await cacheExampleFileId(sent[1]?.photo);
+    }
+    return sent;
+  }
+
+  return null;
+}
+
+/**
+ * Deliver one QR candidate: try it in the gallery album with the example
+ * first, then - if the album itself can't go out - send the QR alone (never
+ * blocked on the example) and attempt the example separately, best-effort.
+ *
+ * Returns `{ delivered, qrPhoto }`. `qrPhoto` is only set when the QR was
+ * freshly uploaded (not sent by a cached file_id or Buffer that isn't worth
+ * caching), for the caller to cache.
+ */
+async function sendQrCandidate(bot, order, qrMedia, exampleState, logEvent) {
+  const gallerySent = await sendGalleryAttempt(bot, order, qrMedia, exampleState, logEvent);
+  if (gallerySent) {
+    return { delivered: true, qrPhoto: gallerySent[0]?.photo };
+  }
+
+  let sent;
+  try {
+    sent = await bot.sendPhoto(order.chatId, qrMedia.media, { caption: qrMedia.caption }, qrMedia.fileOptions);
+  } catch (error) {
+    log('warn', logEvent, { order_code: order.code, error: error.message });
+    return { delivered: false };
+  }
+
+  await sendPaymentExampleBestEffort(bot, order.chatId, exampleState);
+  return { delivered: true, qrPhoto: sent?.photo };
+}
+
+/**
+ * Send the QR and the example screenshot together as one album, so the
+ * customer swipes between them in the same gallery instead of getting two
+ * separate messages.
+ *
+ * Prefers the per-order dynamic PayNow QR; if it can't be delivered at all -
+ * built or sent, alone or with the example - falls back through the
+ * configured static QR image sources the same way.
  */
 async function sendPaymentInstructions(bot, order) {
   const caption = buildPaymentCaption(order);
-  const { item: exampleMedia, cached: exampleCached } = await buildExampleMedia();
+  const exampleState = await buildExampleMedia();
 
   const dynamicQr = await buildDynamicQrMedia(order, caption);
   if (dynamicQr) {
-    const sent = await trySendGallery(bot, order, [dynamicQr, exampleMedia], 'payment_gallery_send_failed');
-    if (sent) {
-      if (!exampleCached) {
-        await cacheExampleFileId(sent);
-      }
+    // Never cached - the amount and reference differ on every order.
+    const { delivered } = await sendQrCandidate(bot, order, dynamicQr, exampleState, 'payment_gallery_send_failed');
+    if (delivered) {
       return;
     }
   }
@@ -654,29 +724,15 @@ async function sendPaymentInstructions(bot, order) {
 
   for (const source of sources) {
     const qrMedia = { type: 'photo', media: resolveImageSource(source), caption };
-    const sent = await trySendGallery(bot, order, [qrMedia, exampleMedia], 'payment_instruction_send_failed');
+    const { delivered, qrPhoto } = await sendQrCandidate(bot, order, qrMedia, exampleState, 'payment_instruction_send_failed');
 
-    if (!sent) {
+    if (!delivered) {
       continue;
     }
 
     // A cache failure after delivery must never send a duplicate message.
     if (source !== cachedFileId) {
-      const qrPhoto = sent[0]?.photo;
-      if (qrPhoto?.length) {
-        try {
-          await stateStore.set(
-            stateStore.KEYS.paymentImageFileId(),
-            qrPhoto[qrPhoto.length - 1].file_id,
-            { ttlMs: 30 * 24 * 60 * 60 * 1000 }
-          );
-        } catch (error) {
-          log('warn', 'payment_image_cache_write_failed', { error: error.message });
-        }
-      }
-    }
-    if (!exampleCached) {
-      await cacheExampleFileId(sent);
+      await cacheQrFileId(qrPhoto);
     }
     return;
   }
@@ -684,6 +740,33 @@ async function sendPaymentInstructions(bot, order) {
   await orderActions.notify(bot, order.chatId,
     caption.replace('Please use PayNow to pay using the QR above.',
       'Payment image unavailable. Please contact an admin for payment details.'));
+}
+
+/**
+ * Best-effort follow-up photo showing what a correctly-completed receipt
+ * looks like. Only reached once the gallery album itself couldn't be
+ * delivered - the real instructions already went out via a lone QR photo, so
+ * a failure here is logged and swallowed rather than blocking the order.
+ */
+async function sendPaymentExampleBestEffort(bot, chatId, exampleState) {
+  const sources = [...new Set([
+    exampleState.cached ? exampleState.item.media : null,
+    resolveImageSource(PAYMENT_EXAMPLE_IMAGE),
+  ].filter(Boolean))];
+
+  for (const source of sources) {
+    let sent;
+    try {
+      sent = await bot.sendPhoto(chatId, source, { caption: PAYMENT_EXAMPLE_CAPTION });
+    } catch (error) {
+      log('warn', 'payment_example_send_failed', { error: error.message });
+      continue;
+    }
+    if (!exampleState.cached) {
+      await cacheExampleFileId(sent?.photo);
+    }
+    return;
+  }
 }
 
 function resolveImageSource(source) {
