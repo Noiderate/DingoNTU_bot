@@ -85,13 +85,27 @@ async function handlePhoneNumberReply(bot, msg) {
     return true;
   }
 
-  await repo.upsertCustomer({
-    telegramUserId: userId,
-    username: msg.from.username || null,
-    firstName: msg.from.first_name || null,
-    lastName: null,
-    phoneNumber,
-  });
+  try {
+    await repo.upsertCustomer({
+      telegramUserId: userId,
+      username: msg.from.username || null,
+      firstName: msg.from.first_name || null,
+      lastName: null,
+      phoneNumber,
+    });
+  } catch (error) {
+    // Left uncaught, this silently loops the customer forever: the state
+    // below never clears, so every next message re-triggers this same
+    // prompt with no visible error at all. Likeliest cause is
+    // customers.phone_number missing from the database - migration
+    // 0006_customer_phone_number.sql not applied yet.
+    log('error', 'phone_number_save_failed', { error: error.message });
+    await bot.sendMessage(
+      chatId,
+      '❌ Something went wrong saving that. Please try again in a moment, or contact an admin if this keeps happening.'
+    );
+    return true;
+  }
 
   await stateStore.remove(stateStore.KEYS.awaitingPhoneNumber(userId));
   await bot.sendMessage(chatId, '✅ Thanks! Now tap ✅ Confirm Order again to complete your order.');

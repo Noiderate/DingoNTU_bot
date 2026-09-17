@@ -611,6 +611,16 @@ To compare the two images, get signed URLs with
 `createReceiptSignedUrl(storagePath)` from `src/services/orderRepository.js`.
 Both `storage_path` values are on the submission rows.
 
+**A duplicate shows up as `error` / `GEMINI_VERIFICATION_FAILURE` instead of
+`duplicate_rejected`.** This was a real bug (fixed 2026-09-18, see the change
+log): the image-hash write at the start of verification had no catch around
+its own unique-violation, so a genuine repeat screenshot threw straight into
+the generic failure handler and got mislabeled as a Gemini failure. If you
+ever see this again, check `src/services/paymentVerifier.js`'s
+`handleDuplicateImage` and the try/catch around the `image_sha256` write in
+`processSubmission` — a future refactor of that evidence step could
+reintroduce the same gap.
+
 ---
 
 ## 4. Runbooks
@@ -942,6 +952,27 @@ An honest list.
 ---
 
 ## 10. Change log
+
+**2026-09-18 — Fixed: a repeat receipt image was reported as a Gemini failure**
+
+- Bug: sending the exact same screenshot twice (or reusing an old receipt for
+  a different order) hit the partial unique index on `image_sha256` doing
+  exactly its job - refusing a second live claim on that hash - but the write
+  that triggered it had no catch for that specific violation. The exception
+  fell through to the generic handler and got recorded (and shown to the
+  customer, and forwarded to admins) as `outcome_reasons:
+  ['GEMINI_VERIFICATION_FAILURE']`, as if the model itself had failed,
+  instead of "this receipt was already used".
+- Fix: that write in `processSubmission` (`src/services/paymentVerifier.js`)
+  now catches the unique violation and resolves it through the new
+  `handleDuplicateImage` - the evidence-stage counterpart to `applyOutcome`'s
+  existing `DUPLICATE_REJECTED` branch. The customer now gets
+  `MESSAGES.DUPLICATE` ("This receipt has already been used...") immediately,
+  before any Gemini call is even made.
+- `reference_normalized`-based duplicate detection (`claimAndRecord`) was
+  never affected - it already had this handling. Only the earlier,
+  image-hash check was missing it.
+- No schema changes.
 
 **2026-09-18 — Sold-out announcements**
 

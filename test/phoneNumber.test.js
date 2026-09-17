@@ -67,6 +67,30 @@ test('handlePhoneNumberReply saves a valid number, clears the state, and confirm
   assert.match(sent[0].text, /Confirm Order/);
 });
 
+test('handlePhoneNumberReply reports an error and leaves the prompt state in place if saving fails, instead of looping silently', async t => {
+  // Regression test: this exact gap (an uncaught throw here) is what turns a
+  // save failure - most likely customers.phone_number missing from the
+  // database because migration 0006 wasn't applied - into an infinite
+  // silent loop: the state below never clears, so every later message
+  // re-triggers the same "we need a contact number" prompt with the
+  // customer never told anything went wrong.
+  t.mock.method(repo, 'upsertCustomer', async () => { throw new Error('column "phone_number" does not exist'); });
+
+  let removeCalled = false;
+  t.mock.method(stateStore, 'remove', async () => { removeCalled = true; });
+
+  const sent = [];
+  const bot = { async sendMessage(chatId, text) { sent.push({ chatId, text }); } };
+
+  const msg = { chat: { id: 555 }, from: { id: 999, username: 'ali', first_name: 'Ali' }, text: '91234567' };
+  await assert.doesNotReject(user.handlePhoneNumberReply(bot, msg));
+
+  assert.equal(removeCalled, false); // state must stay so the customer isn't stuck with no way back in
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /something went wrong/i);
+  assert.doesNotMatch(sent[0].text, /Confirm Order/); // must not claim success
+});
+
 test('handleConfirmOrder asks for a phone number instead of touching stock/locks when none is on file', async t => {
   t.mock.method(repo, 'getCustomerByTelegramId', async () => null);
   t.mock.method(stateStore, 'withLock', async () => { throw new Error('should not reach the lock'); });

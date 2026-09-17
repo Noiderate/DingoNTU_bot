@@ -90,7 +90,15 @@ npm run webhook:info            # url set, pending 0, no last_error
 - [ ] **Sent as a file** (uncompressed document) → works exactly like a photo.
 - [ ] **Duplicate: same receipt, different order.** Place a second order, send
       the first order's receipt → *"This receipt has already been used for
-      another order."* Second order stays payable, first stays paid.
+      another order."* Second order stays payable, first stays paid. **Not**
+      `outcome: error` / `GEMINI_VERIFICATION_FAILURE` (that was a real bug,
+      fixed 2026-09-18 — see MAINTENANCE.md §3.16 — check
+      `payment_submissions.outcome_reasons` to confirm it says
+      `DUPLICATE_IMAGE`, not `GEMINI_VERIFICATION_FAILURE`).
+- [ ] **Duplicate: exact same screenshot sent twice for the same order while
+      the first is still `flagged`** (awaiting admin review) → same duplicate
+      message and reasoning as above, resolved before any Gemini call is even
+      made for the second one.
 - [ ] **Duplicate: resend to the same paid order** → told it is already verified;
       no second approval, no double-count.
 - [ ] **Photo with no order awaiting payment** → ignored, no error.

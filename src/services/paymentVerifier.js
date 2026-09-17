@@ -411,6 +411,51 @@ async function applyOutcome(bot, { order, submission, decision, patch }) {
   return { outcome: OUTCOMES.FLAGGED };
 }
 
+/**
+ * The exact same receipt image is already claimed by another live
+ * submission - caught at the evidence stage (before any Gemini call) by a
+ * unique-violation on image_sha256. This is the claim-time counterpart to
+ * DUPLICATE_REJECTED in applyOutcome, and mirrors notifyClaimTimeDuplicate
+ * below: resolve it as a duplicate straight away rather than letting the
+ * write's exception fall through to handleTerminalFailure, which used to
+ * mislabel a genuine repeat screenshot as a Gemini verification failure.
+ *
+ * image_sha256 is deliberately left unset on this submission - writing it
+ * again would just hit the same unique violation a second time, and the
+ * hash rightfully belongs to whichever submission is already holding it.
+ */
+async function handleDuplicateImage(bot, { order, submission, storagePath, sha256 }) {
+  const conflict = await repo.findConflictingSubmission({ imageSha256: sha256 });
+
+  const resolved = await repo.updatePaymentSubmission(submission.id, {
+    storage_path: storagePath,
+    outcome: OUTCOMES.DUPLICATE_REJECTED,
+    outcome_reasons: [REASONS.DUPLICATE_IMAGE],
+    duplicate_of_submission_id: conflict ? conflict.id : null,
+    completed_at: new Date().toISOString(),
+    locked_by: null,
+    locked_until: null,
+  });
+
+  const reverted = await repo.transitionOrderStatus(
+    order.id, STATUS.VERIFYING_PAYMENT, STATUS.AWAITING_PAYMENT,
+    'ai_verifier', 'Duplicate receipt image'
+  );
+
+  if (reverted) {
+    await deliverOutcomeMessage(bot, order.chatId, submission.processing_message_id, MESSAGES.DUPLICATE);
+  }
+
+  log('warn', 'duplicate_receipt', {
+    order_code: order.code,
+    submission_id: submission.id,
+    conflicting_submission_id: conflict ? conflict.id : null,
+    stage: 'evidence',
+  });
+
+  return { outcome: OUTCOMES.DUPLICATE_REJECTED, submission: resolved };
+}
+
 
 // --- The pipeline ------------------------------------------------------------
 
@@ -505,10 +550,24 @@ async function processSubmission(bot, submissionId, {
 
       await repo.uploadReceipt({ path: storagePath, buffer: imageBuffer, contentType: mimeType });
 
-      submission = await repo.updatePaymentSubmission(submission.id, {
-        storage_path: storagePath,
-        image_sha256: sha256,
-      });
+      try {
+        submission = await repo.updatePaymentSubmission(submission.id, {
+          storage_path: storagePath,
+          image_sha256: sha256,
+        });
+      } catch (error) {
+        if (!isUniqueViolation(error)) {
+          throw error;
+        }
+
+        // The exact same receipt image is already claimed by another live
+        // submission (the partial unique index on image_sha256 - §9.1's
+        // replay guard). Caught here, before any Gemini call, so a genuine
+        // repeat screenshot is reported as a duplicate instead of falling
+        // through to handleTerminalFailure below and being mislabeled as a
+        // Gemini verification failure.
+        return await handleDuplicateImage(bot, { order, submission, storagePath, sha256 });
+      }
     } else {
       imageBuffer = await downloadTelegramFile(bot, submission.telegram_file_id);
     }
@@ -729,4 +788,5 @@ module.exports = {
   forwardToAdmins,
   buildAdminReviewCaption,
   claimAndRecord,
+  handleDuplicateImage,
 };
