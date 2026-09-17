@@ -338,6 +338,19 @@ async function drainOutbox({ limit = 20, deadline = Date.now() + 30000, workerId
     }
   }
 
+  if (drained > 0) {
+    try {
+      // Required lazily: todaySheet imports STATUS_LABELS/PAYMENT_STATUS from
+      // this file, so a top-level require here would create a cycle.
+      const { refreshTodaySheet } = require('./todaySheet');
+      await refreshTodaySheet();
+    } catch (error) {
+      // The Orders mirror above already succeeded; the Today's Orders tab is
+      // a convenience view and must never fail an outbox drain.
+      log('warn', 'today_sheet_refresh_failed', { error: error.message });
+    }
+  }
+
   return { drained, failed, considered: candidates.length };
 }
 

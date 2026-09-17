@@ -21,7 +21,7 @@
 
 <style>
   :root {
-    --amber:      #F2B233;
+    --amber:      #ecee66;
     --amber-deep: #E3A020;
     --red:        #D32F2F;
     --red-deep:   #B71C1C;
@@ -64,7 +64,10 @@
     position: absolute;
     border-radius: 50%;
     pointer-events: none;
-    z-index: 0;
+    /* Negative so it paints behind non-positioned siblings (like .wrap) instead
+       of on top of them -- a positioned z-index:0 box otherwise wins over
+       in-flow content in paint order. */
+    z-index: -1;
   }
   .blob--cream-tl {
     top: -160px; left: -140px;
@@ -91,9 +94,10 @@
   }
   .bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: 10px 12px;
   }
   .brandmark {
     display: flex;
@@ -260,6 +264,9 @@
   footer {
     position: relative;
     z-index: 2;
+    /* Clips the decorative blob at the footer's own edge so it can't extend
+       the document's scrollable height past the visible content. */
+    overflow: hidden;
     padding: 40px 0 52px;
     text-align: center;
   }
@@ -285,6 +292,15 @@
     margin-top: 26px;
     font-size: 13px;
     color: rgba(26,26,26,.7);
+  }
+
+  @media (max-width: 400px) {
+    .brandmark__logo {
+      width: 48px;
+      height: 48px;
+      flex-basis: 48px;
+    }
+    .brandmark { font-size: 17px; }
   }
 
   @media (prefers-reduced-motion: reduce) {

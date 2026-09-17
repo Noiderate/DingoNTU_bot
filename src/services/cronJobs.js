@@ -3,6 +3,7 @@ const { getBot } = require('../app');
 const { getSupabase, unwrap } = require('./supabase');
 const { processQueue } = require('./paymentVerifier');
 const { drainOutbox, reconcile } = require('./sheetMirror');
+const { refreshTodaySheet } = require('./todaySheet');
 const { refreshPreorderPost } = require('../handlers/admin');
 const { refreshDeliveryModeMenus } = require('../handlers/deliveryMode');
 const { ensureAdminIdsLoaded } = require('./googleSheets');
@@ -59,6 +60,18 @@ async function runDrainSheetOutbox(deadline) {
   const reconciled = await reconcile(50);
 
   return { ...drained, ...reconciled };
+}
+
+/**
+ * Rebuild the Today's Orders tab even when nothing drained this tick.
+ *
+ * drainOutbox already refreshes it after a real order change, which covers
+ * the "live" case within seconds. This unconditional, once-a-minute call is
+ * what flips the tab over at midnight (a quiet night has nothing to drain)
+ * and catches anything the drain-triggered refresh missed.
+ */
+async function runRefreshTodaySheet() {
+  return refreshTodaySheet();
 }
 
 /**
@@ -144,6 +157,7 @@ async function runTick({ deadline = Date.now() + config.worker.timeBudgetMs } = 
   const jobs = [
     ['payments', () => runProcessPayments(deadline)],
     ['sheet', () => runDrainSheetOutbox(deadline)],
+    ['todaySheet', () => runRefreshTodaySheet()],
     ['preorder', () => runRefreshPreorder()],
     ['sweep', () => runSweep()],
   ];
@@ -193,6 +207,7 @@ module.exports = {
   runTick,
   runProcessPayments,
   runDrainSheetOutbox,
+  runRefreshTodaySheet,
   runRefreshPreorder,
   runSweep,
 };

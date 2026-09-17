@@ -100,6 +100,15 @@ const config = {
     maxIncompleteAttempts: readInt('MAX_INCOMPLETE_ATTEMPTS', 3),
   },
 
+  service: {
+    // Business runs a night delivery operation, so a calendar-day (midnight
+    // to midnight) boundary would split one night's orders across two
+    // "today" buckets right as service crosses into the small hours. The
+    // service day instead runs from this hour (SGT) to the same hour the
+    // next day, e.g. 3pm today to 3pm tomorrow covers one whole night.
+    dayStartHour: readInt('SERVICE_DAY_START_HOUR', 15),
+  },
+
   worker: {
     cronSecret: readString('CRON_SECRET'),
     timeBudgetMs: readInt('WORKER_TIME_BUDGET_MS', 240000),

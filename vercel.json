@@ -18,6 +18,9 @@
     "api/cron/refresh-preorder.js": {
       "maxDuration": 60
     },
+    "api/cron/refresh-today-sheet.js": {
+      "maxDuration": 60
+    },
     "api/cron/sweep.js": {
       "maxDuration": 120
     },

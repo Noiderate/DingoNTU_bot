@@ -162,6 +162,66 @@ async function writeToSheet(range, values) {
 }
 
 /**
+ * Clear a range's values (not its formatting).
+ */
+async function clearRange(range) {
+  try {
+    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+    await sheets.spreadsheets.values.clear({ spreadsheetId, range });
+    return true;
+  } catch (error) {
+    console.error('Error clearing sheet range:', error.message);
+    return false;
+  }
+}
+
+/**
+ * Look up a tab's numeric sheetId by title, creating the tab if it doesn't
+ * exist yet. Callers that only write values (A1-notation ranges) don't need
+ * this, but formatting requests address a sheet by its numeric id, not title.
+ *
+ * Errors are allowed to throw, unlike most functions in this file: a caller
+ * that can't resolve or create the tab has nowhere safe to write, so
+ * swallowing the error and returning something falsy would just move the
+ * failure somewhere more confusing.
+ */
+async function ensureSheetTab(title) {
+  const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties',
+  });
+
+  const existing = (meta.data.sheets || []).find(s => s.properties.title === title);
+  if (existing) {
+    return existing.properties.sheetId;
+  }
+
+  const response = await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    resource: { requests: [{ addSheet: { properties: { title } } }] },
+  });
+
+  return response.data.replies[0].addSheet.properties.sheetId;
+}
+
+/**
+ * Apply formatting/structure requests (bold ranges, freeze rows, etc) to the
+ * spreadsheet. Cosmetic only - callers should treat a failure here as
+ * non-fatal, since the underlying data write already succeeded by the time
+ * this runs.
+ */
+async function batchUpdateSpreadsheet(requests) {
+  if (!requests || !requests.length) {
+    return;
+  }
+
+  const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId, resource: { requests } });
+}
+
+/**
  * Read data from a sheet range
  */
 async function readFromSheet(range) {
@@ -611,6 +671,9 @@ module.exports = {
   reloadAdminIds,
   appendToSheet,
   writeToSheet,
+  clearRange,
+  ensureSheetTab,
+  batchUpdateSpreadsheet,
   readFromSheet,
   readFromSheetOrThrow,
   addAdmin,
