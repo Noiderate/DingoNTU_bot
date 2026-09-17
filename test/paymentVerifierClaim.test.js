@@ -34,6 +34,29 @@ test('the synchronous path claims the submission before doing any work, and back
   assert.equal(claimCalls[0].submissionId, 'sub-1');
 });
 
+test('the claimed lease covers the full processing deadline, not a shorter fixed default', async t => {
+  t.mock.method(repo, 'getPaymentSubmission', async () => ({ id: 'sub-3', order_id: 'order-3' }));
+  const claimCalls = [];
+  t.mock.method(repo, 'claimSubmissionById', async (submissionId, workerId, options) => {
+    claimCalls.push(options);
+    return null;
+  });
+  t.mock.method(repo, 'getOrderById', async () => { assert.fail('unreachable'); });
+
+  // A long-running invocation: 4 minutes left on its deadline. A fixed 120s
+  // lease would expire while this is still legitimately working, letting a
+  // scheduled tick reclaim and reprocess the same submission concurrently -
+  // the exact bug the claim step exists to prevent, reintroduced via lease
+  // expiry instead of a missing claim.
+  const deadline = Date.now() + 240000;
+  await processSubmission(fakeBot, 'sub-3', { deadline });
+
+  assert.equal(claimCalls.length, 1);
+  // Leases with headroom over the ~240s deadline, not clamped to a shorter
+  // fixed value.
+  assert.ok(claimCalls[0].leaseMs > 200000, `expected a lease covering the deadline, got ${claimCalls[0].leaseMs}ms`);
+});
+
 test('the scheduled worker path (alreadyClaimed) skips claiming - it already holds the lease from claimNextSubmission', async t => {
   t.mock.method(repo, 'getPaymentSubmission', async () => ({ id: 'sub-2', order_id: 'order-2' }));
   t.mock.method(repo, 'claimSubmissionById', async () => {

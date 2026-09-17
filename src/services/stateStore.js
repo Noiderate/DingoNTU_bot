@@ -22,6 +22,9 @@ const KEYS = {
   deliverySequencer: () => 'delivery:sequencer',
   // Channel message ids of posted announcements, so superseded ones are deleted.
   dingoPosts: () => 'delivery:dingo_posts',
+  // Chat/message id of the "Tap each order when served" list for a hall, so a
+  // new order placed after "we are here" is posted can be added to it live.
+  hallServeMessage: hallName => `delivery:serve_msg:${hallName}`,
   // The live preorder post being refreshed, and a hash of its rendered content
   // so an unchanged render skips the Telegram edit.
   preorderPost: () => 'delivery:preorder_post',

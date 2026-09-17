@@ -513,6 +513,55 @@ async function countLiveVerificationLeases() {
  * processing (or null if none was available), and `duplicates` lists any
  * candidates resolved this way so the caller can notify their customers.
  */
+/**
+ * The conditional-claim UPDATE shared by every caller that takes a lease on a
+ * payment_submissions row: outcome/locked_by/locked_until/processing_started_at,
+ * gated on the lease being absent or expired and the row still being live.
+ * Re-checking the lease conditions inside the write (not just in whatever
+ * read selected the candidate) is what makes two workers claiming the same
+ * row impossible even when their reads raced.
+ */
+async function claimRow(supabase, { id, workerId, leaseMs, now, nowIso }) {
+  return supabase
+    .from('payment_submissions')
+    .update({
+      outcome: 'processing',
+      locked_by: workerId,
+      locked_until: new Date(now.getTime() + leaseMs).toISOString(),
+      processing_started_at: nowIso,
+    })
+    .eq('id', id)
+    .or(`locked_until.is.null,locked_until.lt.${nowIso}`)
+    .in('outcome', ['queued', 'processing'])
+    .select()
+    .limit(1);
+}
+
+/**
+ * Resolve a claim attempt that hit payment_submissions_*_claim_idx: the row
+ * being claimed already carries a reference/image from an earlier
+ * release-to-queued cycle that now collides with a different, live
+ * submission. That collision is a real duplicate, not a transient error - the
+ * partial index is the source of truth here, not a pre-check.
+ */
+async function resolveClaimConflict(candidate, nowIso) {
+  const conflict = await findConflictingSubmission({
+    referenceNormalized: candidate.reference_normalized,
+    imageSha256: candidate.image_sha256,
+  });
+
+  const resolved = await updatePaymentSubmission(candidate.id, {
+    outcome: OUTCOMES.DUPLICATE_REJECTED,
+    outcome_reasons: [candidate.reference_normalized ? REASONS.DUPLICATE_REFERENCE : REASONS.DUPLICATE_IMAGE],
+    duplicate_of_submission_id: conflict ? conflict.id : null,
+    completed_at: nowIso,
+    locked_by: null,
+    locked_until: null,
+  });
+
+  return { submission: resolved, conflict };
+}
+
 async function claimNextSubmission(workerId, { leaseMs = 120000 } = {}) {
   const supabase = getSupabase();
   const now = new Date();
@@ -533,42 +582,14 @@ async function claimNextSubmission(workerId, { leaseMs = 120000 } = {}) {
   const duplicates = [];
 
   for (const candidate of candidates) {
-    const result = await supabase
-      .from('payment_submissions')
-      .update({
-        outcome: 'processing',
-        locked_by: workerId,
-        locked_until: new Date(now.getTime() + leaseMs).toISOString(),
-        processing_started_at: nowIso,
-      })
-      .eq('id', candidate.id)
-      // The lease conditions are re-checked here, inside the write, so the
-      // read above being stale cannot cause a double claim.
-      .or(`locked_until.is.null,locked_until.lt.${nowIso}`)
-      .in('outcome', ['queued', 'processing'])
-      .select()
-      .limit(1);
+    const result = await claimRow(supabase, { id: candidate.id, workerId, leaseMs, now, nowIso });
 
     if (result.error) {
       if (!isUniqueViolation(result.error)) {
         unwrap(result, 'claimNextSubmission.claim');
       }
 
-      const conflict = await findConflictingSubmission({
-        referenceNormalized: candidate.reference_normalized,
-        imageSha256: candidate.image_sha256,
-      });
-
-      const resolved = await updatePaymentSubmission(candidate.id, {
-        outcome: OUTCOMES.DUPLICATE_REJECTED,
-        outcome_reasons: [candidate.reference_normalized ? REASONS.DUPLICATE_REFERENCE : REASONS.DUPLICATE_IMAGE],
-        duplicate_of_submission_id: conflict ? conflict.id : null,
-        completed_at: nowIso,
-        locked_by: null,
-        locked_until: null,
-      });
-
-      duplicates.push({ submission: resolved, conflict });
+      duplicates.push(await resolveClaimConflict(candidate, nowIso));
       continue;
     }
 
@@ -592,34 +613,48 @@ async function claimNextSubmission(workerId, { leaseMs = 120000 } = {}) {
  * process it directly with no lease of its own, so a cron tick landing in
  * that window could run a second, fully independent verification pass on the
  * same submission concurrently - each hitting Gemini separately and
- * potentially disagreeing on the outcome. This uses the exact same
- * conditional-UPDATE pattern claimNextSubmission uses per candidate, just
- * targeted at a known id instead of a queue scan.
+ * potentially disagreeing on the outcome. This shares claimRow/resolveClaimConflict
+ * with claimNextSubmission so the two claim paths cannot drift apart.
  *
- * Returns the claimed row, or null if someone else (another invocation, or
- * the scheduled worker) already holds a live lease on it - the caller must
- * skip processing rather than duplicate that work.
+ * Returns the claimed row, or null if someone else (another invocation, the
+ * scheduled worker, or - degenerately - a live duplicate) already holds it,
+ * or has already resolved it as a duplicate. Either way the caller must skip
+ * processing rather than duplicate that work.
  */
 async function claimSubmissionById(submissionId, workerId, { leaseMs = 120000 } = {}) {
   const supabase = getSupabase();
   const now = new Date();
   const nowIso = now.toISOString();
 
-  const result = await supabase
-    .from('payment_submissions')
-    .update({
-      outcome: 'processing',
-      locked_by: workerId,
-      locked_until: new Date(now.getTime() + leaseMs).toISOString(),
-      processing_started_at: nowIso,
-    })
-    .eq('id', submissionId)
-    .or(`locked_until.is.null,locked_until.lt.${nowIso}`)
-    .in('outcome', ['queued', 'processing'])
-    .select()
-    .limit(1);
+  // image_sha256/reference_normalized are only ever populated after this
+  // submission has been through at least one full processing attempt (they
+  // are set well after claiming, once the receipt is downloaded and read).
+  // The current sole caller always claims a just-created row, where both are
+  // still null - so this select exists for correctness if that ever changes,
+  // not because it is expected to find anything today.
+  const [candidate] = unwrap(
+    await supabase
+      .from('payment_submissions')
+      .select('id, image_sha256, reference_normalized')
+      .eq('id', submissionId)
+      .limit(1),
+    'claimSubmissionById.candidate'
+  );
 
-  unwrap(result, 'claimSubmissionById');
+  if (!candidate) {
+    return null;
+  }
+
+  const result = await claimRow(supabase, { id: submissionId, workerId, leaseMs, now, nowIso });
+
+  if (result.error) {
+    if (!isUniqueViolation(result.error)) {
+      unwrap(result, 'claimSubmissionById.claim');
+    }
+
+    await resolveClaimConflict(candidate, nowIso);
+    return null;
+  }
 
   const rows = result.data || [];
   return rows[0] || null;

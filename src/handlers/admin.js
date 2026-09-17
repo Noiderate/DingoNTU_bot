@@ -24,6 +24,9 @@ const {
   recordDingoPost,
   getDingoMsgIdsToDelete,
   consumeTrackedDingoMessageIds,
+  recordHallServeMessage,
+  getHallServeMessage,
+  clearHallServeMessage,
   recordPreorderPost,
   getPreorderPost,
   showDeliveryModeMenu,
@@ -1434,11 +1437,12 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
       const hallOrders = await orderStore.getActiveOrdersByHall(hall.name);
 
       if (hallOrders.length > 0) {
-        await bot.sendMessage(
+        const serveMsg = await bot.sendMessage(
           chatId,
           `✅ ${hallLabel}, we are here\n\nTap each order when served:`,
           { reply_markup: buildHallServeOrdersKeyboard(hallOrders) }
         );
+        await recordHallServeMessage(hall.name, chatId, serveMsg.message_id);
       }
     }
 
@@ -1490,6 +1494,13 @@ async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
       `${query.message.text || '✅ Orders for this hall'}\n\n✅ All orders in this list have been served.`,
       { chat_id: chatId, message_id: messageId }
     ).catch(() => {});
+
+    // Only drop the tracked ref if it still points at this message - a later
+    // "here" post for the same hall may already have replaced it.
+    const tracked = await getHallServeMessage(served.hallName);
+    if (tracked && tracked.messageId === messageId) {
+      await clearHallServeMessage(served.hallName);
+    }
   } else {
     await bot.editMessageReplyMarkup(
       { inline_keyboard: remaining },
@@ -1500,6 +1511,37 @@ async function handleServeOrder(bot, query, chatId, userId, messageId, data) {
   await refreshDeliveryModeMenus(bot);
   await bot.answerCallbackQuery(query.id, { text: `Order ${served.code} marked as served.` });
   return true;
+}
+
+/**
+ * Add a newly-placed order to a hall's already-sent "Tap each order when
+ * served" message, if one is out for that hall. A no-op for halls that
+ * haven't had "we are here" posted yet, or whose list is already finished.
+ */
+async function refreshHallServeOrdersMessage(bot, hallName) {
+  const tracked = await getHallServeMessage(hallName);
+
+  if (!tracked) {
+    return;
+  }
+
+  const hallOrders = await orderStore.getActiveOrdersByHall(hallName);
+
+  if (hallOrders.length === 0) {
+    await clearHallServeMessage(hallName);
+    return;
+  }
+
+  try {
+    await bot.editMessageReplyMarkup(
+      buildHallServeOrdersKeyboard(hallOrders),
+      { chat_id: tracked.chatId, message_id: tracked.messageId }
+    );
+  } catch (error) {
+    if (!String(error.message || '').includes('message is not modified')) {
+      log('warn', 'hall_serve_message_refresh_failed', { hall: hallName, error: error.message });
+    }
+  }
 }
 
 async function handleFinishDelivery(bot, query, chatId, userId) {
@@ -1545,6 +1587,7 @@ module.exports = {
   handleAdminCommand,
   handleAdminCallback,
   refreshPreorderPost,
+  refreshHallServeOrdersMessage,
   sendPaymentInstructions,
   buildPaymentCaption,
   buildPreorderMessageText,

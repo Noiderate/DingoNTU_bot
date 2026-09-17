@@ -331,20 +331,30 @@ async function applyOutcome(bot, { order, submission, decision, patch }) {
 
   if (effectiveOutcome === OUTCOMES.INCOMPLETE_TRANSFER) {
     // Stays payable: the customer can finish the transfer and resend.
-    await repo.transitionOrderStatus(
+    const reverted = await repo.transitionOrderStatus(
       order.id, STATUS.VERIFYING_PAYMENT, STATUS.AWAITING_PAYMENT,
       'ai_verifier', 'Unfinished transfer screenshot'
     );
-    await editProcessingMessage(bot, chatId, processingMessageId, MESSAGES.INCOMPLETE);
+
+    // Someone/something else already moved the order on - telling the
+    // customer to finish an unfinished transfer now would contradict
+    // whatever verdict they already received.
+    if (reverted) {
+      await editProcessingMessage(bot, chatId, processingMessageId, MESSAGES.INCOMPLETE);
+    }
+
     return { outcome: effectiveOutcome };
   }
 
   if (effectiveOutcome === OUTCOMES.DUPLICATE_REJECTED) {
-    await repo.transitionOrderStatus(
+    const reverted = await repo.transitionOrderStatus(
       order.id, STATUS.VERIFYING_PAYMENT, STATUS.AWAITING_PAYMENT,
       'ai_verifier', 'Duplicate receipt'
     );
-    await editProcessingMessage(bot, chatId, processingMessageId, MESSAGES.DUPLICATE);
+
+    if (reverted) {
+      await editProcessingMessage(bot, chatId, processingMessageId, MESSAGES.DUPLICATE);
+    }
 
     log('warn', 'duplicate_receipt', {
       order_code: order.code,
@@ -361,8 +371,13 @@ async function applyOutcome(bot, { order, submission, decision, patch }) {
     'ai_verifier', `Flagged: ${decision.reasons.join(', ')}`
   );
 
-  await editProcessingMessage(bot, chatId, processingMessageId, MESSAGES.FLAGGED);
-  await forwardToAdmins(bot, flagged ? orderStore.toOrder(flagged) : order, claim.submission, decision);
+  // Same guard as handleTerminalFailure below: a null transition means the
+  // order was already resolved elsewhere, so neither the customer nor admins
+  // should hear about a flag that never actually took effect.
+  if (flagged) {
+    await editProcessingMessage(bot, chatId, processingMessageId, MESSAGES.FLAGGED);
+    await forwardToAdmins(bot, orderStore.toOrder(flagged), claim.submission, decision);
+  }
 
   return { outcome: OUTCOMES.FLAGGED };
 }
@@ -397,7 +412,20 @@ async function processSubmission(bot, submissionId, {
   }
 
   if (!alreadyClaimed) {
-    const claimed = await repo.claimSubmissionById(submissionId, workerId || `sync-${crypto.randomUUID().slice(0, 8)}`);
+    // The lease must outlive this whole invocation, not just claimNextSubmission's
+    // default - the retry loop below can legitimately run right up to `deadline`
+    // (it only backs off early if the NEXT wait would cross it), so a shorter
+    // lease could expire while this is still working, letting a scheduled tick
+    // reclaim and reprocess the same submission concurrently - the exact bug
+    // this claim step exists to prevent, reintroduced via lease expiry instead
+    // of a missing claim. The buffer covers the work after the loop's own
+    // deadline check (the final extraction call, decision, DB writes).
+    const leaseMs = Math.max(deadline - Date.now(), 0) + 30000;
+    const claimed = await repo.claimSubmissionById(
+      submissionId,
+      workerId || `sync-${crypto.randomUUID().slice(0, 8)}`,
+      { leaseMs }
+    );
 
     if (!claimed) {
       // Someone else - the scheduled worker, or a concurrent retry of this

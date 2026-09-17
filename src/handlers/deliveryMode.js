@@ -106,6 +106,23 @@ async function consumeTrackedDingoMessageIds() {
   return [...new Set(ids)];
 }
 
+/**
+ * Track the "Tap each order when served" message sent for a hall, so a new
+ * order placed for that hall afterwards can be added to it live instead of
+ * only ever reflecting a snapshot taken at "we are here" time.
+ */
+async function recordHallServeMessage(hallName, chatId, messageId) {
+  return stateStore.set(stateStore.KEYS.hallServeMessage(hallName), { chatId, messageId });
+}
+
+async function getHallServeMessage(hallName) {
+  return stateStore.get(stateStore.KEYS.hallServeMessage(hallName), null);
+}
+
+async function clearHallServeMessage(hallName) {
+  return stateStore.remove(stateStore.KEYS.hallServeMessage(hallName));
+}
+
 async function getNextHallToPostState(halls) {
   const sequencer = await getSequencer();
 
@@ -290,6 +307,9 @@ module.exports = {
   recordDingoPost,
   getDingoMsgIdsToDelete,
   consumeTrackedDingoMessageIds,
+  recordHallServeMessage,
+  getHallServeMessage,
+  clearHallServeMessage,
   recordPreorderPost,
   getPreorderPost,
   hasPreorderPost,

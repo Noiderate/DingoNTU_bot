@@ -578,10 +578,11 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
   // To restore it, remove requiresAdminApproval: false above, restore this call,
   // and remove the direct payment-instruction call below.
   // await notifyAdminsOfNewOrder(bot, reservation);
-  const { sendPaymentInstructions, refreshPreorderPost } = require('./admin');
+  const { sendPaymentInstructions, refreshPreorderPost, refreshHallServeOrdersMessage } = require('./admin');
   await sendPaymentInstructions(bot, reservation);
   await require('./deliveryMode').refreshDeliveryModeMenus(bot);
   await refreshPreorderPost(bot);
+  await refreshHallServeOrdersMessage(bot, reservation.hallName);
   return true;
 }
 
