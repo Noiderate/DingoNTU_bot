@@ -737,12 +737,24 @@ async function handleUserPhoto(bot, msg) {
   }
 
   // The deadline is judged here, on receipt, rather than when verification
-  // finishes, so a slow check never costs someone their order.
+  // finishes, so a slow check never costs someone their order. Expiring it
+  // immediately (rather than leaving it for the sweeper's next tick) avoids a
+  // second, disconnected-looking "has expired" message landing minutes later.
   if (await hasPaymentWindowElapsed(order)) {
-    await bot.sendMessage(
-      chatId,
-      `⌛ The payment window for Order ${order.code} has closed. Please restart your order by typing /start.`
-    );
+    const expired = await orderActions.expireOrder(bot, order);
+
+    if (expired) {
+      // The order was awaiting_payment (active), so it may be sitting in its
+      // hall's cached "we are here" list - drop it now, same as the sweeper.
+      const { refreshHallServeOrdersMessage } = require('./admin');
+      await refreshHallServeOrdersMessage(bot, expired.hallName).catch(() => {});
+    } else {
+      await bot.sendMessage(
+        chatId,
+        `⌛ The payment window for Order ${order.code} has closed. Please restart your order by typing /start.`
+      );
+    }
+
     return true;
   }
 

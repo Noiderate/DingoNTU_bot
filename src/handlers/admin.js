@@ -22,6 +22,8 @@ const { formatCents } = require('../utils/money');
 const { isImageDocument } = require('../utils/telegramFiles');
 const { log } = require('../utils/logger');
 const {
+  DEFAULT_SEQUENCER,
+  setSequencer,
   advanceNextHallToPost,
   isExpectedNextHallToPost,
   getNextHallToPostState,
@@ -1677,12 +1679,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   }
 
   if (data === CALLBACKS.DELIVERY_MODE_RESET_HALLS) {
-    await orderStore.clearBlockedHalls();
-    await refreshPreorderPost(bot);
-    await refreshDeliveryModeMenus(bot);
-    await answer('✅ Halls have been reset.');
-    await bot.sendMessage(chatId, '✅ Halls have been reset. Orders are now available to be placed by any halls.');
-    return true;
+    return handleResetHallsAndOrders(bot, chatId, answer);
   }
 
   return false;
@@ -2320,6 +2317,59 @@ async function refreshHallServeOrdersMessage(bot, hallName) {
   }
 }
 
+/**
+ * Reset for a new delivery round: close out anything still active from the
+ * last one, rewind the hall sequencer back to the first hall, and drop the
+ * per-hall serve caches so the delivery menu and "we are here" lists start
+ * clean instead of carrying over whatever the sequencer/cache last held.
+ *
+ * Previously this only cleared hall blocks, leaving the sequencer wherever
+ * automation last advanced it - Finish Delivery is what resets that, and
+ * tapping an old Reset Halls button instead of a fresh one skipped it,
+ * leaving the next round starting mid-sequence instead of at the first hall.
+ */
+async function handleResetHallsAndOrders(bot, chatId, answer) {
+  const leftoverOrders = await orderStore.getActiveOrders();
+  const closedSummaries = [];
+
+  for (const order of leftoverOrders) {
+    const closed = await orderActions.closeLeftoverOrder(bot, order);
+
+    if (closed) {
+      const items = (order.items || []).map(item => `${item.name} x${item.quantity}`).join(', ');
+      closedSummaries.push(
+        `🏢 ${order.hallName}: ${orderActions.describeCustomer(order)} - ${items} `
+        + `(${order.status === STATUS.PAID ? 'paid' : 'unpaid'})`
+      );
+    }
+  }
+
+  await setSequencer({ ...DEFAULT_SEQUENCER });
+
+  const halls = await getHalls();
+  for (const hall of halls) {
+    await clearHallServeMessage(hall.name);
+    await stateStore.remove(stateStore.KEYS.hallServeOrdersCache(hall.name));
+  }
+
+  await orderStore.clearBlockedHalls();
+  await refreshPreorderPost(bot);
+  await refreshDeliveryModeMenus(bot);
+  await answer('✅ Halls and orders have been reset.');
+
+  const summaryText = closedSummaries.length
+    ? `\n\nClosed leftover orders:\n${closedSummaries.join('\n')}`
+    : '';
+
+  await bot.sendMessage(
+    chatId,
+    '✅ Halls and orders have been reset. Orders are now available to be placed by any hall, '
+    + `starting from ${halls[0] ? halls[0].name : 'the first hall'}.${summaryText}`
+  );
+
+  return true;
+}
+
 async function handleFinishDelivery(bot, query, chatId, userId) {
   await bot.answerCallbackQuery(query.id);
 
@@ -2351,7 +2401,7 @@ async function handleFinishDelivery(bot, query, chatId, userId) {
 
   await bot.sendMessage(chatId, '✅ Delivery finished. Tap below to reset halls when you are ready.', {
     reply_markup: {
-      inline_keyboard: [[{ text: '🔄 Reset Halls', callback_data: CALLBACKS.DELIVERY_MODE_RESET_HALLS }]],
+      inline_keyboard: [[{ text: '🔄 Reset Halls and Orders', callback_data: CALLBACKS.DELIVERY_MODE_RESET_HALLS }]],
     },
   });
 

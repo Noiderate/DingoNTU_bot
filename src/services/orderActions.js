@@ -159,11 +159,50 @@ async function rejectOrderAndRestock(bot, order, {
 }
 
 /**
+ * Close out an order still active when the admin resets halls between
+ * delivery rounds - it either never got paid (restock + reject, same as any
+ * other rejection) or got paid but was never marked served.
+ *
+ * A paid order goes straight to SERVED with no restock and, deliberately, no
+ * customer message: we have no way to know whether food actually changed
+ * hands, so it would be dishonest to tell the customer it did. The caller is
+ * expected to show the admin a summary of what got closed instead, so a paid
+ * order nobody served doesn't just silently vanish.
+ */
+async function closeLeftoverOrder(bot, order) {
+  if (order.status === STATUS.PAID) {
+    const updated = await repo.transitionOrderStatus(
+      order.id,
+      STATUS.PAID,
+      STATUS.SERVED,
+      'system',
+      'Closed by delivery round reset - payment received, serving unconfirmed'
+    );
+
+    return updated ? orderStore.toOrder(updated) : null;
+  }
+
+  const result = await rejectOrderAndRestock(bot, order, {
+    fromStatus: order.status,
+    actor: 'system',
+    reason: 'Delivery round reset',
+    customerMessage: `❌ Order ${order.code} was closed because the delivery round ended before payment was completed.\n\n`
+      + `The items have been returned to stock. If you still want to order, please create a new order by typing /start.`,
+  });
+
+  return result.success ? result.order : null;
+}
+
+/**
  * Expire an unpaid order once its payment window has elapsed.
  *
- * Only ever called from the sweeper, and only for orders still in
- * awaiting_payment: an order already being verified is never expired, because
- * the deadline is judged on when the customer SENT their screenshot.
+ * Called both by the sweeper and, on a late photo upload, directly from
+ * handleUserPhoto - so an overdue order gets expired at the moment it's
+ * caught rather than waiting for the next sweep. Only ever for orders still
+ * in awaiting_payment: an order already being verified is never expired,
+ * because the deadline is judged on when the customer SENT their screenshot.
+ * The atomic status transition means a race between the two callers just
+ * results in one of them getting `null` back, not a double-expiry.
  */
 async function expireOrder(bot, order) {
   const restock = await restockOrder(order);
@@ -217,6 +256,7 @@ module.exports = {
   restockOrder,
   markOrderPaid,
   rejectOrderAndRestock,
+  closeLeftoverOrder,
   expireOrder,
   buildOrderSummary,
   describeCustomer,

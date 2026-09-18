@@ -214,6 +214,10 @@ async function getDeliveryModeView() {
   const gatingHall = await getGatingHall(halls);
   const gatingProgress = gatingHall ? await orderStore.getHallServeProgress(gatingHall.name) : null;
 
+  const hallHasNoOrders = mode === 'here' && nextHallToPost
+    ? !orders.some(order => order.hallName === nextHallToPost.name)
+    : false;
+
   return {
     text: menuTexts.deliveryModeText(halls, orders, foodItems, {
       nextHallToPost,
@@ -221,7 +225,7 @@ async function getDeliveryModeView() {
       gatingHall,
       gatingProgress,
     }),
-    keyboard: keyboards.deliveryModeKeyboard(nextHallToPost, mode, blocked.last, allHallsBlocked),
+    keyboard: keyboards.deliveryModeKeyboard(nextHallToPost, mode, blocked.last, allHallsBlocked, hallHasNoOrders),
   };
 }
 

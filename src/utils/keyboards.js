@@ -214,7 +214,7 @@ const MANUALLY_POSTED_MODES = ['preorder', 'here'];
 /**
  * Delivery mode menu keyboard
  */
-function deliveryModeKeyboard(nextHallToPost, nextHallToPostMode, lastBlockedHall, allHallsBlocked) {
+function deliveryModeKeyboard(nextHallToPost, nextHallToPostMode, lastBlockedHall, allHallsBlocked, hallHasNoOrders) {
   const buttons = [];
 
   if (nextHallToPost && MANUALLY_POSTED_MODES.includes(nextHallToPostMode)) {
@@ -222,10 +222,19 @@ function deliveryModeKeyboard(nextHallToPost, nextHallToPostMode, lastBlockedHal
       ? `Post preorder available message   `
       : `Post in Dingo Channel: ${nextHallToPost.shortName || nextHallToPost.name}, we are here   `;
 
-    buttons.push([{
-      text: postText,
-      callback_data: `${CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX}${nextHallToPostMode}:${nextHallToPost.id}`,
-    }]);
+    const callbackData = `${CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX}${nextHallToPostMode}:${nextHallToPost.id}`;
+
+    buttons.push([{ text: postText, callback_data: callbackData }]);
+
+    // Same action as the button above (and as /skip) - posting "here" never
+    // checks order count. This just makes it visible up front that there is
+    // nobody to serve, so skipping past this hall needs no second-guessing.
+    if (nextHallToPostMode === 'here' && hallHasNoOrders) {
+      buttons.push([{
+        text: `⏭️ Skip ${nextHallToPost.shortName || nextHallToPost.name} - no orders`,
+        callback_data: callbackData,
+      }]);
+    }
   }
 
   if (allHallsBlocked) {
