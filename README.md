@@ -112,7 +112,11 @@ hall" for it); the admin ends the night with **Finish Delivery** instead, which
 clears the channel posts and resets the sequencer.
 
 `Revert last blocked hall` and `Reset Halls` remain as manual overrides if the
-automatic closure needs undoing.
+automatic closure needs undoing. **`/skip`**, sent by any admin, force-posts
+whatever the sequencer currently has queued next - get ready, coming, or here -
+regardless of serve progress. It's the manual override for when the automatic
+trigger can't or shouldn't wait, or didn't fire when it should have (check the
+logs for `auto_advance_post_failed` - see MAINTENANCE.md §3.2).
 
 The live preorder post re-renders whenever something changes it through the bot,
 and once a minute from the scheduler to catch edits typed straight into the

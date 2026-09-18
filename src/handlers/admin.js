@@ -554,7 +554,58 @@ async function handleAdminCommand(bot, msg) {
     return true;
   }
 
+  if (text === '/skip') {
+    return handleSkipCommand(bot, chatId, userId);
+  }
+
   return false;
+}
+
+/**
+ * Manual override: force-post whatever the sequencer currently has queued
+ * as next (get-ready, coming, or here), regardless of serve progress. The
+ * automatic get-ready/coming triggers have no manual button of their own
+ * (see MAINTENANCE.md limitation #16 and README's "Delivery mode" section) -
+ * this is the recovery path for when that automation can't or shouldn't
+ * wait, or silently didn't fire (auto_advance_post_failed in the logs).
+ *
+ * Goes through postDingoUpdate, the exact same path a button tap or the
+ * automation itself uses, so it is still lock-safe against a concurrent
+ * post and still runs the same customer-notify/hall-block hooks.
+ */
+async function handleSkipCommand(bot, chatId, userId) {
+  const halls = await googleSheets.getHalls();
+  const { hall: nextHall, mode } = await getNextHallToPostState(halls);
+
+  if (!nextHall) {
+    await bot.sendMessage(chatId, 'Nothing queued to skip to right now.');
+    return true;
+  }
+
+  const result = await postDingoUpdate(bot, { hallId: nextHall.id, postMode: mode, notifyChatId: chatId });
+
+  if (!result.posted) {
+    const FAILURE_MESSAGES = {
+      locked: 'A delivery update is already being posted - try again in a moment.',
+      hall_not_found: 'Hall not found - the halls list may have changed since this was queued.',
+      stale: 'This has already moved on. Reopen Delivery Mode to see the current state.',
+      no_channel: 'DINGO_CHANNEL_ID is not set in the environment.',
+      send_failed: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.',
+    };
+
+    await bot.sendMessage(chatId, `❌ ${FAILURE_MESSAGES[result.reason] || 'Could not post.'}`);
+    return true;
+  }
+
+  await bot.sendMessage(chatId, `⏭️ Skipped ahead - posted to the Dingo channel: ${result.text}`);
+
+  // Mirrors handleDeliveryPost: a skipped "here" for a hall nobody ordered
+  // from should still cascade straight through its own get-ready/coming.
+  if (mode === 'here') {
+    await autoAdvanceDeliveryStage(bot, result.hall.name);
+  }
+
+  return true;
 }
 
 /** Multi-step prompts: add admin, add food, add hall, edit stock. */
@@ -1841,7 +1892,12 @@ async function autoAdvanceDeliveryStage(bot, hallName) {
   const halls = await googleSheets.getHalls();
   const hallIndex = halls.findIndex(hall => hall.name === hallName);
 
-  if (hallIndex === -1 || hallIndex === halls.length - 1) {
+  if (hallIndex === -1) {
+    log('warn', 'auto_advance_hall_not_found', { hall: hallName });
+    return;
+  }
+
+  if (hallIndex === halls.length - 1) {
     return;
   }
 
@@ -1858,8 +1914,17 @@ async function autoAdvanceDeliveryStage(bot, hallName) {
 
     if (!result.posted) {
       // Most likely 'locked' (a concurrent tap/tick got there first) or
-      // 'stale' (someone else already advanced past this). Either way,
-      // nothing more for this call to do.
+      // 'stale' (someone else already advanced past this) - both harmless,
+      // whatever holds the lock/is current will have driven this forward
+      // itself. hall_not_found/no_channel/send_failed are not: those mean
+      // this cascade silently stopped and nothing else will retry it, which
+      // used to be untraceable. /skip (handleSkipCommand) is the manual
+      // recovery for exactly this.
+      if (result.reason !== 'locked' && result.reason !== 'stale') {
+        log('warn', 'auto_advance_post_failed', {
+          hall: hallName, next_hall: nextHall.name, mode, reason: result.reason,
+        });
+      }
       return;
     }
   }
@@ -2297,6 +2362,7 @@ async function handleFinishDelivery(bot, query, chatId, userId) {
 module.exports = {
   handleAdminCommand,
   handleAdminCallback,
+  handleSkipCommand,
   refreshPreorderPost,
   refreshHallServeOrdersMessage,
   findNewlySoldOutItems,

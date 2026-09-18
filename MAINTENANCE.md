@@ -269,11 +269,23 @@ group by status;
   anyway if the food went out (`markOrderServed` allows serving unpaid, see
   §9) - either way it stops blocking the count: a rejected order drops out of
   the denominator entirely, a served one adds to the numerator.
-- There is currently **no manual override button** to force-post get-ready or
-  coming ahead of the threshold - that was removed along with manual hall
-  blocking. If staff genuinely need to skip ahead (e.g. leaving early), the
-  fastest fix is clearing the remaining orders' status as above so the real
-  threshold is met, not editing state directly.
+- **Send `/skip`** to force-post whatever's queued next regardless of
+  threshold - the manual override for when this needs to move faster than
+  serve progress allows, or when it should have fired automatically and
+  didn't. See `handleSkipCommand` in `src/handlers/admin.js`.
+- If it silently stopped mid-cascade (e.g. a hall nobody ordered from should
+  have cascaded straight through get-ready **and** coming for the hall after
+  it, but didn't), search logs for `auto_advance_post_failed` - it names the
+  hall, the mode it was trying to post, and why (`hall_not_found` is the
+  usual one: a hall's row shifted in the sheet between when it was queued and
+  when this ran - see §3.3). `locked`/`stale` are not logged; both are
+  harmless races where whatever holds the lock drives it forward instead.
+- The auto-advance guard that skips the **last** hall in the list
+  (`hallIndex === halls.length - 1` in `autoAdvanceDeliveryStage`) only ever
+  applies to the *last* hall - a hall in the middle of the list with zero
+  orders should still cascade normally. If it doesn't and there's no
+  `auto_advance_post_failed` log line either, that's a bug, not this
+  guard - check `getHallServeProgress`'s result for that hall directly.
 
 **An admin is stuck mid-prompt** (every message becomes a hall name):
 
@@ -896,10 +908,10 @@ An honest list.
     physically hand food over and should not be blocked — but it means an unpaid
     order can reach `served`. The payment state stays visible in the sheet.
 
-12. **No manual override for get-ready/coming.** Automating them (§3.2) removed
-    the buttons entirely — there is no admin-facing way to force-post ahead of
-    the 2/3/100% threshold, only to fix the underlying order data so the real
-    threshold is met. Acceptable for now; revisit if staff hit this in practice.
+12. ~~No manual override for get-ready/coming.~~ **Resolved 2026-09-18**: any
+    admin can send `/skip` to force-post whatever the sequencer currently has
+    queued next (get-ready, coming, or here), regardless of serve progress.
+    See `handleSkipCommand` in `src/handlers/admin.js` and §3.2 below.
 
 13. **"2/3 served" counts orders, not individual food items.** An order with
     five items and an order with one both count as one unit of progress. If a
@@ -952,6 +964,23 @@ An honest list.
 ---
 
 ## 10. Change log
+
+**2026-09-18 — `/skip` command, and logging for a silent auto-advance failure**
+
+- New `/skip` command (any admin): force-posts whatever the sequencer has
+  queued next (get-ready, coming, or here) regardless of serve progress. Goes
+  through the same `postDingoUpdate` a button tap or the automation itself
+  uses, so it's lock-safe and still runs the block/customer-notify hooks. See
+  `handleSkipCommand` in `src/handlers/admin.js`. Resolves known limitation
+  #12 (no manual override existed for get-ready/coming since they stopped
+  being buttons).
+- Fixed: `autoAdvanceDeliveryStage`'s cascade could stop silently when a
+  `postDingoUpdate` call inside it failed for a real reason
+  (`hall_not_found`, `no_channel`, `send_failed`) - nothing was logged, so a
+  hall stuck mid-cascade with no explanation was effectively undiagnosable.
+  Now logs `auto_advance_post_failed` with the hall, target mode, and reason
+  (`locked`/`stale` stay silent - both are harmless races, not failures).
+- No schema changes.
 
 **2026-09-18 — Fixed: a repeat receipt image was reported as a Gemini failure**
 

@@ -244,6 +244,22 @@ Every one of these must behave exactly as it did before the upgrade.
 - [ ] Editing stock **directly in the spreadsheet** updates the post within
       about a minute (this is the one intentional delay).
 
+### 8d. `/skip`
+
+- [ ] With the sequencer waiting on an automatic `get ready` or `coming`
+      (below threshold), send `/skip` → posts it immediately to the Dingo
+      channel, same as if the threshold had been met. `coming` still closes
+      the hall and sends the customer DM, same as automatic.
+- [ ] `/skip` on a queued **here** posts it and, if that hall has zero
+      orders, still cascades through its own get-ready/coming for the hall
+      after it — same as tapping the button manually.
+- [ ] `/skip` with nothing queued (e.g. right after Finish Delivery, before
+      posting a new preorder) → clear "nothing queued" reply, no crash.
+- [ ] `/skip` while a post is already in flight (the delivery-post lock is
+      held) → clear "already being posted" reply, doesn't double-post.
+- [ ] A non-admin sending `/skip` gets no response (same as any other admin
+      command).
+
 ### 8a. Hall serve list (grouped by phone number)
 
 - [ ] `we are here` lists **one row per customer**, not per order — a customer
