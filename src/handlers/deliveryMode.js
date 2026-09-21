@@ -145,6 +145,13 @@ async function isExpectedNextHallToPost(halls, hallId, mode) {
  * reaching a serve-progress threshold. Null for 'preorder'/'here', which stay
  * manual and have no such dependency, so the admin menu knows when there's
  * simply nothing to show a countdown for.
+ *
+ * Also null for the very first 'coming' of the night (hall index 0, right
+ * after preorder posts): the (index - 1) wraparound would otherwise point at
+ * the *last* hall, which hasn't been served at all yet, so that threshold
+ * would never be met and the menu would show a countdown that can't
+ * complete. There is no real predecessor to gate on here - it needs a manual
+ * post, same as 'here' (see isFirstComingOfNight/getDeliveryModeView).
  */
 async function getGatingHall(halls) {
   const sequencer = await getSequencer();
@@ -154,6 +161,11 @@ async function getGatingHall(halls) {
   }
 
   const index = sequencer.index % halls.length;
+
+  if (index === 0 && sequencer.mode === 'coming') {
+    return null;
+  }
+
   const gatingIndex = (index - 1 + halls.length) % halls.length;
   return halls[gatingIndex];
 }
@@ -214,7 +226,13 @@ async function getDeliveryModeView() {
   const gatingHall = await getGatingHall(halls);
   const gatingProgress = gatingHall ? await orderStore.getHallServeProgress(gatingHall.name) : null;
 
-  const hallHasNoOrders = mode === 'here' && nextHallToPost
+  // The first hall's 'coming' has no gating hall (see getGatingHall) and
+  // nothing ever auto-triggers it, so it needs the same manual button 'here'
+  // gets - otherwise the first hall is stuck with no way to move forward
+  // short of typing /skip.
+  const comingNeedsManualPost = mode === 'coming' && !gatingHall && Boolean(nextHallToPost);
+
+  const hallHasNoOrders = (mode === 'here' || comingNeedsManualPost) && nextHallToPost
     ? !orders.some(order => order.hallName === nextHallToPost.name)
     : false;
 
@@ -225,7 +243,9 @@ async function getDeliveryModeView() {
       gatingHall,
       gatingProgress,
     }),
-    keyboard: keyboards.deliveryModeKeyboard(nextHallToPost, mode, blocked.last, allHallsBlocked, hallHasNoOrders),
+    keyboard: keyboards.deliveryModeKeyboard(
+      nextHallToPost, mode, blocked.last, allHallsBlocked, hallHasNoOrders, comingNeedsManualPost
+    ),
   };
 }
 

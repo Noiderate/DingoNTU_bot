@@ -213,23 +213,35 @@ const MANUALLY_POSTED_MODES = ['preorder', 'here'];
 
 /**
  * Delivery mode menu keyboard
+ *
+ * comingNeedsManualPost: true for the very first hall's 'coming' post, which
+ * has no previous hall to auto-trigger off of (see getGatingHall in
+ * deliveryMode.js) and so needs a manual button same as 'here' does.
  */
-function deliveryModeKeyboard(nextHallToPost, nextHallToPostMode, lastBlockedHall, allHallsBlocked, hallHasNoOrders) {
+function deliveryModeKeyboard(
+  nextHallToPost, nextHallToPostMode, lastBlockedHall, allHallsBlocked, hallHasNoOrders, comingNeedsManualPost = false
+) {
   const buttons = [];
+  const canManuallyPost = nextHallToPost && (
+    MANUALLY_POSTED_MODES.includes(nextHallToPostMode)
+    || (nextHallToPostMode === 'coming' && comingNeedsManualPost)
+  );
 
-  if (nextHallToPost && MANUALLY_POSTED_MODES.includes(nextHallToPostMode)) {
+  if (canManuallyPost) {
     const postText = nextHallToPostMode === 'preorder'
       ? `Post preorder available message   `
-      : `${nextHallToPost.shortName || nextHallToPost.name}, we are here   `;
+      : nextHallToPostMode === 'coming'
+        ? `${nextHallToPost.shortName || nextHallToPost.name}, we are coming   `
+        : `${nextHallToPost.shortName || nextHallToPost.name}, we are here   `;
 
     const callbackData = `${CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX}${nextHallToPostMode}:${nextHallToPost.id}`;
 
     buttons.push([{ text: postText, callback_data: callbackData }]);
 
-    // Same action as the button above (and as /skip) - posting "here" never
-    // checks order count. This just makes it visible up front that there is
+    // Same action as the button above (and as /skip) - posting never checks
+    // order count. This just makes it visible up front that there is
     // nobody to serve, so skipping past this hall needs no second-guessing.
-    if (nextHallToPostMode === 'here' && hallHasNoOrders) {
+    if ((nextHallToPostMode === 'here' || (nextHallToPostMode === 'coming' && comingNeedsManualPost)) && hallHasNoOrders) {
       buttons.push([{
         text: `⏭️ Skip ${nextHallToPost.shortName || nextHallToPost.name} - no orders`,
         callback_data: callbackData,
