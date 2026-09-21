@@ -146,12 +146,20 @@ async function isExpectedNextHallToPost(halls, hallId, mode) {
  * manual and have no such dependency, so the admin menu knows when there's
  * simply nothing to show a countdown for.
  *
- * Also null for the very first 'coming' of the night (hall index 0, right
- * after preorder posts): the (index - 1) wraparound would otherwise point at
- * the *last* hall, which hasn't been served at all yet, so that threshold
- * would never be met and the menu would show a countdown that can't
- * complete. There is no real predecessor to gate on here - it needs a manual
- * post, same as 'here' (see isFirstComingOfNight/getDeliveryModeView).
+ * Also null for hall index 0 in 'coming' or 'get-ready' mode - both only ever
+ * occur there via the (index - 1) wraparound, which would otherwise point at
+ * the *last* hall as the "gating" hall. Two different situations land on
+ * index 0:
+ *  - 'coming': the very first hall of the night, right after preorder posts.
+ *    There is no real predecessor yet - it needs a manual post, same as
+ *    'here' (see comingNeedsManualPost in getDeliveryModeView).
+ *  - 'get-ready': the sequencer just wrapped after the *actual* last hall's
+ *    "here" posted - the round is over, not a genuine next hall queued up.
+ *    autoAdvanceDeliveryStage already knows not to auto-post from here (see
+ *    its hallIndex === halls.length - 1 guard); this is that same case, just
+ *    reached going the other direction. Wrapping to the last hall here would
+ *    show a countdown gated on progress that's already 100% and will never
+ *    re-trigger anything - the admin should see "Finish Delivery" instead.
  */
 async function getGatingHall(halls) {
   const sequencer = await getSequencer();
@@ -162,7 +170,7 @@ async function getGatingHall(halls) {
 
   const index = sequencer.index % halls.length;
 
-  if (index === 0 && sequencer.mode === 'coming') {
+  if (index === 0) {
     return null;
   }
 
