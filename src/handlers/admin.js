@@ -16,7 +16,7 @@ const repo = require('../services/orderRepository');
 const stateStore = require('../services/stateStore');
 const cartStore = require('../services/cartStore');
 const paynowQr = require('../services/paynowQr');
-const { getMenuMessageId, setMenuMessageId, clearMenuMessageId } = require('../services/chatTracker');
+const { getMenuMessageId, setMenuMessageId, clearMenuMessageId, isMessageLatestInChat } = require('../services/chatTracker');
 const { config } = require('../config');
 const { formatCents } = require('../utils/money');
 const { isImageDocument } = require('../utils/telegramFiles');
@@ -38,7 +38,7 @@ const {
   showDeliveryModeMenu,
   setDeliveryModeViewer,
   clearDeliveryModeViewer,
-  refreshDeliveryModeMenus,
+  refreshDeliveryModeMenus: refreshDeliveryModeMenusOnly,
 } = require('./deliveryMode');
 
 const STATUS = repo.STATUS;
@@ -2202,11 +2202,11 @@ async function handleServeMarkOrder(bot, query, chatId, messageId, data, kind) {
   const hallOrders = await refreshHallServeOrdersCache(served.hallName);
 
   if (hallOrders.length === 0) {
-    await editMessageTextSafely(
-      bot,
-      `${HALL_SERVE_LIST_HEADER(served.hallName)}\n\n✅ All orders in this list have been served.`,
-      { chat_id: chatId, message_id: messageId }
-    ).catch(() => {});
+    try {
+      await bot.deleteMessage(chatId, messageId);
+    } catch (error) {
+      log('warn', 'hall_serve_message_delete_failed', { hall: served.hallName, error: error.message });
+    }
 
     // Only drop the tracked ref if it still points at this message - a later
     // "here" post for the same hall may already have replaced it.
@@ -2295,6 +2295,11 @@ async function refreshHallServeOrdersMessage(bot, hallName) {
   const hallOrders = await refreshHallServeOrdersCache(hallName);
 
   if (hallOrders.length === 0) {
+    try {
+      await bot.deleteMessage(tracked.chatId, tracked.messageId);
+    } catch (error) {
+      log('warn', 'hall_serve_message_delete_failed', { hall: hallName, error: error.message });
+    }
     await clearHallServeMessage(hallName);
     return;
   }
@@ -2315,6 +2320,67 @@ async function refreshHallServeOrdersMessage(bot, hallName) {
       log('warn', 'hall_serve_message_refresh_failed', { hall: hallName, error: error.message });
     }
   }
+}
+
+/**
+ * Keep every hall's "Tap a phone number" list sitting below the delivery
+ * mode menu in its chat.
+ *
+ * The delivery menu re-pins itself to the bottom of the chat whenever it is
+ * no longer the newest message there (see deliveryMode.sendDeliveryModeMenu) -
+ * which, left alone, means it leapfrogs back below any serve list the moment
+ * anything else is sent to that chat and the menu next refreshes. Called
+ * straight after every menu refresh, this restores the serve list to the
+ * bottom again so the delivery mode text is always the one on top.
+ */
+async function repositionHallServeMessagesBelowMenu(bot) {
+  const halls = await getHalls();
+
+  for (const hall of halls) {
+    const tracked = await getHallServeMessage(hall.name);
+
+    if (!tracked || await isMessageLatestInChat(tracked.chatId, tracked.messageId)) {
+      continue;
+    }
+
+    const hallOrders = await refreshHallServeOrdersCache(hall.name);
+
+    if (hallOrders.length === 0) {
+      try {
+        await bot.deleteMessage(tracked.chatId, tracked.messageId);
+      } catch (error) {
+        log('warn', 'hall_serve_message_delete_failed', { hall: hall.name, error: error.message });
+      }
+      await clearHallServeMessage(hall.name);
+      continue;
+    }
+
+    try {
+      await bot.deleteMessage(tracked.chatId, tracked.messageId);
+    } catch (error) {
+      log('warn', 'hall_serve_message_reposition_delete_failed', { hall: hall.name, error: error.message });
+    }
+
+    try {
+      const resent = await bot.sendMessage(
+        tracked.chatId,
+        HALL_SERVE_LIST_HEADER(hall.name),
+        { reply_markup: buildHallCustomerListKeyboard(hall.name, hallOrders) }
+      );
+      await recordHallServeMessage(hall.name, tracked.chatId, resent.message_id);
+    } catch (error) {
+      log('warn', 'hall_serve_message_reposition_send_failed', { hall: hall.name, error: error.message });
+    }
+  }
+}
+
+/**
+ * Wraps deliveryMode's own menu refresh so the hall serve list(s) always end
+ * up repositioned below it afterwards - see repositionHallServeMessagesBelowMenu.
+ */
+async function refreshDeliveryModeMenus(bot) {
+  await refreshDeliveryModeMenusOnly(bot);
+  await repositionHallServeMessagesBelowMenu(bot);
 }
 
 /**
@@ -2415,6 +2481,7 @@ module.exports = {
   handleSkipCommand,
   refreshPreorderPost,
   refreshHallServeOrdersMessage,
+  refreshDeliveryModeMenus,
   findNewlySoldOutItems,
   announceSoldOut,
   repostPreorderAvailability,

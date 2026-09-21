@@ -220,7 +220,7 @@ function deliveryModeKeyboard(nextHallToPost, nextHallToPostMode, lastBlockedHal
   if (nextHallToPost && MANUALLY_POSTED_MODES.includes(nextHallToPostMode)) {
     const postText = nextHallToPostMode === 'preorder'
       ? `Post preorder available message   `
-      : `Post in Dingo Channel: ${nextHallToPost.shortName || nextHallToPost.name}, we are here   `;
+      : `${nextHallToPost.shortName || nextHallToPost.name}, we are here   `;
 
     const callbackData = `${CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX}${nextHallToPostMode}:${nextHallToPost.id}`;
 

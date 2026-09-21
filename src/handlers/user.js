@@ -675,9 +675,11 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
   // To restore it, remove requiresAdminApproval: false above, restore this call,
   // and remove the direct payment-instruction call below.
   // await notifyAdminsOfNewOrder(bot, order);
-  const { sendPaymentInstructions, refreshPreorderPostAfterStockChange, refreshHallServeOrdersMessage } = require('./admin');
+  const {
+    sendPaymentInstructions, refreshPreorderPostAfterStockChange, refreshHallServeOrdersMessage, refreshDeliveryModeMenus,
+  } = require('./admin');
   await sendPaymentInstructions(bot, order);
-  await require('./deliveryMode').refreshDeliveryModeMenus(bot);
+  await refreshDeliveryModeMenus(bot);
   await refreshPreorderPostAfterStockChange(bot, stockChanges);
   await refreshHallServeOrdersMessage(bot, order.hallName);
   return true;
