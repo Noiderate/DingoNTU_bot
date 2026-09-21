@@ -2410,6 +2410,34 @@ async function handleResetHallsAndOrders(bot, chatId, answer) {
     }
   }
 
+  // Put stock back to whatever an admin last manually set it to (see
+  // updateFoodItemStock), undoing the night's consumption - not a running
+  // "add back what was rejected" total, the actual opening number.
+  const foodItems = await googleSheets.getFoodItems();
+  const stockBaselines = await stateStore.get(stateStore.KEYS.stockBaselines(), {});
+  const stockChanges = [];
+  const noBaselineItems = [];
+
+  for (const item of foodItems) {
+    if (!Object.prototype.hasOwnProperty.call(stockBaselines, item.name)) {
+      noBaselineItems.push(item.name);
+      continue;
+    }
+
+    const baseline = stockBaselines[item.name];
+    const oldStock = item.stock || 0;
+
+    if (oldStock !== baseline) {
+      stockChanges.push({ rowId: item.id, name: item.name, oldStock, newStock: baseline });
+    }
+  }
+
+  if (stockChanges.length) {
+    await googleSheets.updateFoodItemStocksBatch(
+      stockChanges.map(({ rowId, newStock }) => ({ rowId, newStock }))
+    );
+  }
+
   await setSequencer({ ...DEFAULT_SEQUENCER });
 
   const halls = await getHalls();
@@ -2419,18 +2447,26 @@ async function handleResetHallsAndOrders(bot, chatId, answer) {
   }
 
   await orderStore.clearBlockedHalls();
-  await refreshPreorderPost(bot);
+  await refreshPreorderPostAfterStockChange(bot, stockChanges);
   await refreshDeliveryModeMenus(bot);
   await answer('✅ Halls and orders have been reset.');
 
-  const summaryText = closedSummaries.length
+  const closedText = closedSummaries.length
     ? `\n\nClosed leftover orders:\n${closedSummaries.join('\n')}`
+    : '';
+
+  const stockText = stockChanges.length
+    ? `\n\nStock reset to opening levels:\n${stockChanges.map(c => `${c.name}: ${c.oldStock} → ${c.newStock}`).join('\n')}`
+    : '';
+
+  const noBaselineText = noBaselineItems.length
+    ? `\n\n⚠️ No starting stock recorded for: ${noBaselineItems.join(', ')} - left unchanged.`
     : '';
 
   await bot.sendMessage(
     chatId,
     '✅ Halls and orders have been reset. Orders are now available to be placed by any hall, '
-    + `starting from ${halls[0] ? halls[0].name : 'the first hall'}.${summaryText}`
+    + `starting from ${halls[0] ? halls[0].name : 'the first hall'}.${closedText}${stockText}${noBaselineText}`
   );
 
   return true;

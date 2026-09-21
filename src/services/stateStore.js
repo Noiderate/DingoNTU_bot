@@ -44,6 +44,12 @@ const KEYS = {
   preorderPost: () => 'delivery:preorder_post',
   // Highest message id seen per chat, for admin-menu positioning.
   latestChatMessage: chatId => `chat:latest_msg:${chatId}`,
+  // Each food item's last admin-set stock level, keyed by item name (not row
+  // id - rows shift when the sheet is edited directly, see MAINTENANCE.md
+  // "Row-number-as-ID"). Updated only by a manual stock edit, never by an
+  // order's deduct/restock, so "Reset Halls and Orders" can put stock back to
+  // what the admin actually configured rather than wherever the night left it.
+  stockBaselines: () => 'stock:baselines',
   // Cached t.me deep link and payment-image file_id, to avoid repeat API calls.
   botStartUrl: () => 'cache:bot_start_url',
   paymentImageFileId: () => 'cache:payment_image_file_id',

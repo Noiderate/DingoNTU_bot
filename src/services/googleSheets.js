@@ -1,6 +1,8 @@
 const { google } = require('googleapis');
 // Load both local environment files before reading process.env directly.
 require('../config');
+const stateStore = require('./stateStore');
+const { log } = require('../utils/logger');
 
 // Initialize Google Sheets auth
 const auth = new google.auth.GoogleAuth({
@@ -477,6 +479,20 @@ async function updateFoodItemStock(rowId, newStock) {
     });
 
     console.log(`✓ Stock updated for ${itemName}: ${newStock}`);
+
+    // Only a manual admin edit reaches this function - order-driven
+    // deduct/restock goes through updateFoodItemStocksBatch instead - so this
+    // is the one place that should move the "what Reset Halls and Orders
+    // restores to" baseline.
+    try {
+      await stateStore.update(stateStore.KEYS.stockBaselines(), current => ({
+        ...(current || {}),
+        [itemName]: newStock,
+      }));
+    } catch (error) {
+      log('warn', 'stock_baseline_update_failed', { item: itemName, error: error.message });
+    }
+
     return { success: true, message: `✓ Stock updated for "${itemName}" to ${newStock}.` };
   } catch (error) {
     console.error('Error updating food stock:', error.message);
