@@ -547,7 +547,7 @@ async function handleAdminCommand(bot, msg) {
   const isCommand = typeof text === 'string' && text.startsWith('/');
   const state = isCommand ? null : await getAdminState(userId);
 
-  if (state && await handleAdminStateInput(bot, chatId, userId, text, state)) {
+  if (state && await handleAdminStateInput(bot, chatId, userId, text, state, msg.message_id)) {
     return true;
   }
 
@@ -611,7 +611,7 @@ async function handleSkipCommand(bot, chatId, userId) {
 }
 
 /** Multi-step prompts: add admin, add food, add hall, edit stock. */
-async function handleAdminStateInput(bot, chatId, userId, text, state) {
+async function handleAdminStateInput(bot, chatId, userId, text, state, messageId) {
   if (typeof state === 'string') {
     if (state === STATES.ADD_ADMIN) {
       const adminId = Number.parseInt(text, 10);
@@ -681,8 +681,22 @@ async function handleAdminStateInput(bot, chatId, userId, text, state) {
     const beforeItem = (await getFoodItems()).find(item => item.id === state.foodItemId);
 
     const result = await updateFoodItemStock(state.foodItemId, newStock);
-    await bot.sendMessage(chatId, result.message);
+    const confirmation = await bot.sendMessage(chatId, result.message);
     await clearAdminState(userId);
+
+    // The number typed in and its confirmation are only useful for the
+    // instant it takes to apply - clean them up so the self-editing menu
+    // (which now shows the new stock level anyway) is the only thing left.
+    try {
+      await bot.deleteMessage(chatId, messageId);
+    } catch (error) {
+      log('warn', 'stock_edit_input_delete_failed', { error: error.message });
+    }
+    try {
+      await bot.deleteMessage(chatId, confirmation.message_id);
+    } catch (error) {
+      log('warn', 'stock_edit_confirmation_delete_failed', { error: error.message });
+    }
 
     const foodItems = await getFoodItems();
     await updateMenuMessage(
@@ -710,6 +724,14 @@ async function handleAdminStateInput(bot, chatId, userId, text, state) {
     const currentItem = state.items[state.currentIndex];
     await updateFoodItemStock(currentItem.id, newStock);
 
+    // Keeps the loop clean - only the self-editing prompt should remain
+    // between steps, not a trail of the numbers typed along the way.
+    try {
+      await bot.deleteMessage(chatId, messageId);
+    } catch (error) {
+      log('warn', 'stock_edit_input_delete_failed', { error: error.message });
+    }
+
     const nextIndex = state.currentIndex + 1;
 
     if (nextIndex < state.items.length) {
@@ -723,8 +745,14 @@ async function handleAdminStateInput(bot, chatId, userId, text, state) {
       return true;
     }
 
-    await bot.sendMessage(chatId, menuTexts.updateCompleteText(state.items.length));
+    const completion = await bot.sendMessage(chatId, menuTexts.updateCompleteText(state.items.length));
     await clearAdminState(userId);
+
+    try {
+      await bot.deleteMessage(chatId, completion.message_id);
+    } catch (error) {
+      log('warn', 'stock_edit_completion_delete_failed', { error: error.message });
+    }
 
     const updatedItems = await getFoodItems();
     await updateMenuMessage(
