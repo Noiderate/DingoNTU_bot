@@ -1707,7 +1707,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   }
 
   if (data === CALLBACKS.DELIVERY_MODE_RESET_HALLS) {
-    return handleResetHallsAndOrders(bot, chatId, answer);
+    return handleResetHallsAndOrders(bot, chatId, messageId, answer);
   }
 
   return false;
@@ -2422,7 +2422,17 @@ async function refreshDeliveryModeMenus(bot) {
  * tapping an old Reset Halls button instead of a fresh one skipped it,
  * leaving the next round starting mid-sequence instead of at the first hall.
  */
-async function handleResetHallsAndOrders(bot, chatId, answer) {
+async function handleResetHallsAndOrders(bot, chatId, messageId, answer) {
+  // Delete the "Reset Halls and Orders" prompt itself first, before doing any
+  // of the (multi-step, non-instant) reset work below - otherwise the button
+  // stays tappable the whole time and a second tap re-runs this from scratch
+  // (closing "leftover" orders again, reapplying stock baselines twice, etc).
+  try {
+    await bot.deleteMessage(chatId, messageId);
+  } catch (error) {
+    log('warn', 'reset_halls_prompt_delete_failed', { error: error.message });
+  }
+
   const leftoverOrders = await orderStore.getActiveOrders();
   const closedSummaries = [];
 
