@@ -18,8 +18,8 @@ function mainMenuKeyboard() {
   return {
     inline_keyboard: [
       [{ text: '⚙️ Settings', callback_data: CALLBACKS.ADMIN_SETTINGS }],
-      [{ text: '� Enter Delivery Mode', callback_data: CALLBACKS.SETTINGS_DELIVERY_MODE }],
-      [{ text: '�📊 Stats', callback_data: CALLBACKS.ADMIN_STATS }],
+      [{ text: '🚚 Enter Delivery Mode', callback_data: CALLBACKS.SETTINGS_DELIVERY_MODE }],
+      [{ text: '📊 Stats', callback_data: CALLBACKS.ADMIN_STATS }],
       [{ text: '🔄 Reload Settings', callback_data: CALLBACKS.ADMIN_RELOAD }],
     ],
   };
@@ -32,8 +32,9 @@ function settingsMenuKeyboard() {
   return {
     inline_keyboard: [
       [{ text: '👥 Manage Admins', callback_data: CALLBACKS.SETTINGS_MANAGE_ADMINS }],
-      [{ text: '�🍔 Manage Food Items', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }],
+      [{ text: '🍔 Manage Food Items', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }],
       [{ text: '🏢 Manage Halls', callback_data: CALLBACKS.SETTINGS_MANAGE_HALLS }],
+      [{ text: '📝 Edit Dingo Post', callback_data: CALLBACKS.SETTINGS_PREORDER_POST }],
       [{ text: '← Back', callback_data: CALLBACKS.ADMIN_MENU_BACK }],
     ],
   };
@@ -47,7 +48,7 @@ function manageAdminsKeyboard() {
     inline_keyboard: [
       [{ text: '➕ Add Admin', callback_data: CALLBACKS.MANAGE_ADD_ADMIN }],
       [{ text: '➖ Delete Admin', callback_data: CALLBACKS.MANAGE_DELETE_ADMIN }],
-      [{ text: '�️ Set Admin to Tag', callback_data: CALLBACKS.SETTINGS_SET_ADMIN_TAG }],
+      [{ text: '🏷️ Set Admin to Tag', callback_data: CALLBACKS.SETTINGS_SET_ADMIN_TAG }],
       [{ text: '← Back', callback_data: CALLBACKS.ADMIN_SETTINGS }],
     ],
   };
@@ -207,6 +208,41 @@ function backToHallsKeyboard() {
   };
 }
 
+/**
+ * Settings > Edit Dingo Post. The clear/remove buttons only appear when
+ * there is something custom to clear.
+ */
+function preorderPostKeyboard(custom) {
+  const textRow = [{ text: '✏️ Edit Text', callback_data: CALLBACKS.PREORDER_EDIT_TEXT }];
+  if (custom.text) {
+    textRow.push({ text: '↩️ Use Default Text', callback_data: CALLBACKS.PREORDER_RESET_TEXT });
+  }
+
+  const photoRow = [{
+    text: custom.photoFileId ? '🖼 Replace Photo' : '🖼 Attach Photo',
+    callback_data: CALLBACKS.PREORDER_ATTACH_PHOTO,
+  }];
+  if (custom.photoFileId) {
+    photoRow.push({ text: '🗑 Remove Photo', callback_data: CALLBACKS.PREORDER_REMOVE_PHOTO });
+  }
+
+  return {
+    inline_keyboard: [
+      textRow,
+      photoRow,
+      [{ text: '👁 Preview', callback_data: CALLBACKS.PREORDER_PREVIEW }],
+      [{ text: '← Back', callback_data: CALLBACKS.ADMIN_SETTINGS }],
+    ],
+  };
+}
+
+/** Back out of an Edit Dingo Post prompt without changing anything. */
+function backToPreorderPostKeyboard() {
+  return {
+    inline_keyboard: [[{ text: '← Back', callback_data: CALLBACKS.SETTINGS_PREORDER_POST }]],
+  };
+}
+
 // get-ready and coming now post automatically off hall serve progress; only
 // these two stages still need an admin tap.
 const MANUALLY_POSTED_MODES = ['preorder', 'here'];
@@ -290,4 +326,6 @@ module.exports = {
   addHallKeyboard,
   backToHallsKeyboard,
   deliveryModeKeyboard,
+  preorderPostKeyboard,
+  backToPreorderPostKeyboard,
 };

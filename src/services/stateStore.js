@@ -46,6 +46,9 @@ const KEYS = {
   // The live preorder post being refreshed, and a hash of its rendered content
   // so an unchanged render skips the Telegram edit.
   preorderPost: () => 'delivery:preorder_post',
+  // Admin-set first line and photo for the preorder post ({ text, photoFileId },
+  // either may be null). Set under Settings > Edit Dingo Post; no expiry.
+  preorderCustom: () => 'settings:preorder_custom',
   // Highest message id seen per chat, for admin-menu positioning.
   latestChatMessage: chatId => `chat:latest_msg:${chatId}`,
   // Each food item's last admin-set stock level, keyed by item name (not row

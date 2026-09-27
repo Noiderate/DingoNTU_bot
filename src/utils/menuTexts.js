@@ -283,6 +283,32 @@ function deliveryModeText(halls, orders, foodItems = [], stage = {}) {
     .slice(0, DELIVERY_MENU_MAX_LENGTH);
 }
 
+/** Settings > Edit Dingo Post: what is currently set. */
+function preorderPostText(custom) {
+  const text = custom.text
+    ? `"${custom.text}"`
+    : 'Default - "Preorders available for {hall} onwards"';
+
+  return '📝 Dingo Post\n\n'
+    + 'Your text replaces the first line of the preorder post in the Dingo channel. '
+    + 'The food list, contact line and ordering button are always added below it.\n\n'
+    + `Text: ${text}\n`
+    + `Photo: ${custom.photoFileId ? 'Attached - the post is sent as this photo, with the text as its caption' : 'None'}\n\n`
+    + 'Changes apply to a live preorder post straight away.';
+}
+
+function preorderEditTextPromptText(maxLength) {
+  return '✏️ Send the new first line for the preorder post.\n\n'
+    + 'Write {hall} where the hall name should go, e.g.\n'
+    + '"Supper is open! Preorders for {hall} onwards 🍜"\n\n'
+    + `Up to ${maxLength} characters.`;
+}
+
+function preorderAttachPhotoPromptText() {
+  return '🖼 Send the photo to show on the preorder post.\n\n'
+    + 'Send it as a photo, not as a file.';
+}
+
 /**
  * Set admin to tag selection text
  */
@@ -316,4 +342,7 @@ module.exports = {
   addHallPromptText,
   deleteHallSelectText,
   deliveryModeText,
+  preorderPostText,
+  preorderEditTextPromptText,
+  preorderAttachPhotoPromptText,
 };

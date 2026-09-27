@@ -25,6 +25,14 @@ const CALLBACKS = {
   FOOD_EDIT_STOCK_PREFIX: 'food_edit_stock_',
   FOOD_EDIT_ALL_STOCK: 'food_edit_all_stock',
 
+  // Dingo channel preorder post: custom first line and optional photo
+  SETTINGS_PREORDER_POST: 'settings_preorder_post',
+  PREORDER_EDIT_TEXT: 'preorder_edit_text',
+  PREORDER_RESET_TEXT: 'preorder_reset_text',
+  PREORDER_ATTACH_PHOTO: 'preorder_attach_photo',
+  PREORDER_REMOVE_PHOTO: 'preorder_remove_photo',
+  PREORDER_PREVIEW: 'preorder_preview',
+
   // Halls
   SETTINGS_MANAGE_HALLS: 'settings_manage_halls',
   HALL_ADD: 'hall_add',
@@ -68,6 +76,8 @@ const STATES = {
   EDIT_FOOD_STOCK_SPECIFIC: 'edit_food_stock_specific',
   EDIT_ALL_FOOD_STOCK_LOOP: 'edit_all_food_stock_loop',
   ADD_HALL: 'add_hall',
+  EDIT_PREORDER_TEXT: 'edit_preorder_text',
+  ATTACH_PREORDER_PHOTO: 'attach_preorder_photo',
 };
 
 /**

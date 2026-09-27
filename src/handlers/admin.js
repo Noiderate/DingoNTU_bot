@@ -317,7 +317,36 @@ function buildAvailableFoodLines(foodItems) {
   return available.map(item => `• ${escapeHtml(item.name)}`);
 }
 
-async function buildPreorderMessageText(hallLabel, adminUsername) {
+// --- Custom preorder post (Settings > Edit Dingo Post) ------------------------
+
+// Telegram caps photo captions at 1024 characters. The custom line is kept
+// well under that so the food list and contact line still fit beneath it.
+const PHOTO_CAPTION_MAX_LENGTH = 1024;
+const PREORDER_CUSTOM_TEXT_MAX_LENGTH = 500;
+
+async function getPreorderCustom() {
+  const stored = await stateStore.get(stateStore.KEYS.preorderCustom(), null) || {};
+  return { text: stored.text || null, photoFileId: stored.photoFileId || null };
+}
+
+async function setPreorderCustom(patch) {
+  return stateStore.update(stateStore.KEYS.preorderCustom(), current => ({ ...(current || {}), ...patch }));
+}
+
+/**
+ * The first line of the preorder post: the admin's custom text from Settings
+ * ("Edit Dingo Post"), or the default when none is set. {hall} in custom
+ * text is replaced with the hall ordering opens from.
+ */
+function buildPreorderIntro(hallLabel, customText) {
+  if (!customText) {
+    return `Preorders available for ${escapeHtml(hallLabel)} onwards`;
+  }
+
+  return escapeHtml(customText).replace(/\{hall\}/gi, () => escapeHtml(hallLabel));
+}
+
+async function buildPreorderMessageText(hallLabel, adminUsername, { customText = null, maxLength = Infinity } = {}) {
   // Throws rather than rendering "No food currently available" onto the public
   // post whenever a Sheets read blips.
   const foodItems = await googleSheets.getFoodItemsOrThrow();
@@ -325,9 +354,79 @@ async function buildPreorderMessageText(hallLabel, adminUsername) {
     ? `Or for any delivery related issues, message @${adminUsername}.`
     : 'Or for any delivery related issues, please contact an admin.';
 
-  return `Preorders available for ${escapeHtml(hallLabel)} onwards\n\n`
-    + `Available food:\n${buildAvailableFoodLines(foodItems).join('\n')}\n\n`
+  const intro = buildPreorderIntro(hallLabel, customText);
+  const foodLines = buildAvailableFoodLines(foodItems);
+  const render = lines => `${intro}\n\n`
+    + `Available food:\n${lines.join('\n')}\n\n`
     + `Click below to start ordering.\n${contactLine}`;
+
+  // A photo caption is capped at 1024 characters: drop food lines from the
+  // end (saying how many) rather than have Telegram reject the whole post.
+  let text = render(foodLines);
+  for (let shown = foodLines.length - 1; text.length > maxLength && shown >= 1; shown -= 1) {
+    text = render([...foodLines.slice(0, shown), `• …and ${foodLines.length - shown} more`]);
+  }
+
+  return text;
+}
+
+/**
+ * Everything the live preorder post shows, rendered once so posting, editing
+ * and reposting can't drift apart. photoFileId is set when an admin attached
+ * a photo in Settings - the post is then that photo with the text as caption.
+ */
+async function renderPreorderContent(bot, hallLabel) {
+  const custom = await getPreorderCustom();
+  const adminId = await googleSheets.getPreorderAdminTag();
+  const adminUsername = adminId ? await googleSheets.getAdminUsernameById(bot, adminId) : null;
+  const photoFileId = custom.photoFileId || null;
+
+  const text = await buildPreorderMessageText(hallLabel, adminUsername, {
+    customText: custom.text,
+    maxLength: photoFileId ? PHOTO_CAPTION_MAX_LENGTH : Infinity,
+  });
+  const startUrl = await getBotStartUrl(bot);
+
+  return {
+    text,
+    photoFileId,
+    button: buildPreorderStartButton(startUrl),
+    contentHash: `${text}::${startUrl}::${photoFileId || ''}`,
+  };
+}
+
+async function sendPreorderContent(bot, chatId, content) {
+  const markup = content.button ? { reply_markup: content.button } : {};
+
+  if (content.photoFileId) {
+    return bot.sendPhoto(chatId, content.photoFileId, { caption: content.text, parse_mode: 'HTML', ...markup });
+  }
+
+  return bot.sendMessage(chatId, content.text, { parse_mode: 'HTML', disable_web_page_preview: true, ...markup });
+}
+
+/**
+ * Replace the live preorder post with a freshly sent one. Needed whenever the
+ * post switches between text and photo (or to a different photo), which an
+ * edit can't do. The old post is only deleted once the new one is out.
+ */
+async function replacePreorderPost(bot, post, content) {
+  let sent;
+  try {
+    sent = await sendPreorderContent(bot, post.channelId, content);
+  } catch (error) {
+    log('error', 'preorder_repost_failed', { error: error.message });
+    return false;
+  }
+
+  try {
+    await bot.deleteMessage(post.channelId, post.msgId);
+  } catch (error) {
+    log('warn', 'preorder_repost_delete_failed', { error: error.message });
+  }
+
+  await recordPreorderPost(post.channelId, sent.message_id, content.photoFileId);
+  return true;
 }
 
 /**
@@ -369,27 +468,37 @@ async function renderPreorderPost(bot) {
     return { skipped: 'no_unblocked_hall' };
   }
 
-  const adminId = await googleSheets.getPreorderAdminTag();
-  const adminUsername = adminId ? await googleSheets.getAdminUsernameById(bot, adminId) : null;
-  const text = await buildPreorderMessageText(nextHall.shortName || nextHall.name, adminUsername);
-  const startUrl = await getBotStartUrl(bot);
-
-  const contentHash = `${text}::${startUrl}`;
+  const content = await renderPreorderContent(bot, nextHall.shortName || nextHall.name);
+  const { contentHash } = content;
 
   if (post.contentHash === contentHash) {
     return { skipped: 'unchanged' };
   }
 
-  try {
-    const button = buildPreorderStartButton(startUrl);
+  // An edit can't turn a text post into a photo (or swap the photo).
+  if ((post.photoFileId || null) !== content.photoFileId) {
+    return (await replacePreorderPost(bot, post, content)) ? { reposted: true } : { failed: true };
+  }
 
-    await bot.editMessageText(text, {
-      chat_id: post.channelId,
-      message_id: post.msgId,
-      parse_mode: 'HTML',
-      disable_web_page_preview: true,
-      ...(button ? { reply_markup: button } : {}),
-    });
+  try {
+    const markup = content.button ? { reply_markup: content.button } : {};
+
+    if (content.photoFileId) {
+      await bot.editMessageCaption(content.text, {
+        chat_id: post.channelId,
+        message_id: post.msgId,
+        parse_mode: 'HTML',
+        ...markup,
+      });
+    } else {
+      await bot.editMessageText(content.text, {
+        chat_id: post.channelId,
+        message_id: post.msgId,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        ...markup,
+      });
+    }
 
     await stateStore.set(stateStore.KEYS.preorderPost(), { ...post, contentHash });
     return { refreshed: true };
@@ -455,20 +564,17 @@ async function repostPreorderAvailability(bot) {
     return;
   }
 
-  let nextHall;
-  let text;
+  let content;
   try {
     const halls = await googleSheets.getHallsOrThrow();
     const blocked = await orderStore.loadBlockedHalls();
-    nextHall = halls.find(hall => !blocked.isBlocked(hall.name));
+    const nextHall = halls.find(hall => !blocked.isBlocked(hall.name));
 
     if (!nextHall) {
       return;
     }
 
-    const adminId = await googleSheets.getPreorderAdminTag();
-    const adminUsername = adminId ? await googleSheets.getAdminUsernameById(bot, adminId) : null;
-    text = await buildPreorderMessageText(nextHall.shortName || nextHall.name, adminUsername);
+    content = await renderPreorderContent(bot, nextHall.shortName || nextHall.name);
   } catch (error) {
     if (!googleSheets.isSheetsUnavailable(error)) {
       throw error;
@@ -479,28 +585,7 @@ async function repostPreorderAvailability(bot) {
     return;
   }
 
-  const startUrl = await getBotStartUrl(bot);
-  const button = buildPreorderStartButton(startUrl);
-
-  let sent;
-  try {
-    sent = await bot.sendMessage(post.channelId, text, {
-      parse_mode: 'HTML',
-      disable_web_page_preview: true,
-      ...(button ? { reply_markup: button } : {}),
-    });
-  } catch (error) {
-    log('error', 'preorder_repost_failed', { error: error.message });
-    return;
-  }
-
-  try {
-    await bot.deleteMessage(post.channelId, post.msgId);
-  } catch (error) {
-    log('warn', 'preorder_repost_delete_failed', { error: error.message });
-  }
-
-  await recordPreorderPost(post.channelId, sent.message_id);
+  await replacePreorderPost(bot, post, content);
 }
 
 /**
@@ -522,6 +607,138 @@ async function refreshPreorderPostAfterStockChange(bot, changes) {
 
 
 // --- Menu plumbing -----------------------------------------------------------
+
+/**
+ * Settings > Edit Dingo Post, optionally with a line saying what just
+ * happened to the live post.
+ */
+async function showPreorderPostMenu(bot, chatId, userId, status = null) {
+  const custom = await getPreorderCustom();
+  const text = menuTexts.preorderPostText(custom) + (status ? `\n\n${status}` : '');
+  await updateMenuMessage(bot, chatId, userId, text, keyboards.preorderPostKeyboard(custom));
+}
+
+/** Push a saved change to the live preorder post, and describe the result. */
+async function applyPreorderCustomChange(bot) {
+  const result = await refreshPreorderPost(bot);
+
+  if (result.refreshed || result.reposted || result.skipped === 'unchanged' || result.skipped === 'not_modified') {
+    return '✅ Saved - the live preorder post has been updated.';
+  }
+
+  if (result.skipped === 'no_post' || result.skipped === 'no_unblocked_hall') {
+    return '✅ Saved - it will be used for the next preorder post.';
+  }
+
+  return "✅ Saved, but the live post couldn't be updated just now - it will retry within a minute.";
+}
+
+async function handlePreorderPostCallback(bot, query, chatId, userId, data, answer) {
+  if (data === CALLBACKS.SETTINGS_PREORDER_POST) {
+    await clearAdminState(userId);
+    await showPreorderPostMenu(bot, chatId, userId);
+    await answer();
+    return true;
+  }
+
+  if (data === CALLBACKS.PREORDER_EDIT_TEXT) {
+    await setAdminState(userId, STATES.EDIT_PREORDER_TEXT);
+    await updateMenuMessage(
+      bot, chatId, userId,
+      menuTexts.preorderEditTextPromptText(PREORDER_CUSTOM_TEXT_MAX_LENGTH),
+      keyboards.backToPreorderPostKeyboard()
+    );
+    await answer();
+    return true;
+  }
+
+  if (data === CALLBACKS.PREORDER_ATTACH_PHOTO) {
+    await setAdminState(userId, STATES.ATTACH_PREORDER_PHOTO);
+    await updateMenuMessage(
+      bot, chatId, userId,
+      menuTexts.preorderAttachPhotoPromptText(),
+      keyboards.backToPreorderPostKeyboard()
+    );
+    await answer();
+    return true;
+  }
+
+  if (data === CALLBACKS.PREORDER_RESET_TEXT || data === CALLBACKS.PREORDER_REMOVE_PHOTO) {
+    await answer();
+    await setPreorderCustom(data === CALLBACKS.PREORDER_RESET_TEXT ? { text: null } : { photoFileId: null });
+    await showPreorderPostMenu(bot, chatId, userId, await applyPreorderCustomChange(bot));
+    return true;
+  }
+
+  if (data === CALLBACKS.PREORDER_PREVIEW) {
+    return handlePreorderPreview(bot, chatId, answer);
+  }
+
+  return false;
+}
+
+/**
+ * Send the admin exactly what the channel would get right now - same
+ * renderer, same photo/caption handling - without touching the channel.
+ */
+async function handlePreorderPreview(bot, chatId, answer) {
+  let content;
+  try {
+    const halls = await googleSheets.getHallsOrThrow();
+    const blocked = await orderStore.loadBlockedHalls();
+    const hall = halls.find(entry => !blocked.isBlocked(entry.name)) || halls[0];
+    content = await renderPreorderContent(bot, hall ? (hall.shortName || hall.name) : 'your hall');
+  } catch (error) {
+    if (!googleSheets.isSheetsUnavailable(error)) {
+      throw error;
+    }
+    await answer('Could not read the menu from Google Sheets. Try again in a moment.', { show_alert: true });
+    return true;
+  }
+
+  try {
+    await sendPreorderContent(bot, chatId, content);
+    await answer('Preview sent below.');
+  } catch (error) {
+    log('warn', 'preorder_preview_failed', { error: error.message });
+    await answer(`Telegram rejected the preview: ${error.message}`, { show_alert: true });
+  }
+
+  return true;
+}
+
+/**
+ * The admin's photo for the preorder post, sent after tapping Attach Photo.
+ * Returns false (not handled) unless that prompt is pending, so every other
+ * photo falls through to drop-off/receipt handling as before.
+ */
+async function handleAdminPreorderPhoto(bot, msg) {
+  const userId = msg.from.id;
+
+  if (!isAdmin(userId) || await getAdminState(userId) !== STATES.ATTACH_PREORDER_PHOTO) {
+    return false;
+  }
+
+  const chatId = msg.chat.id;
+
+  // Only a photo's file_id can be re-sent as a photo; a file's can't.
+  if (!msg.photo || !msg.photo.length) {
+    await bot.sendMessage(chatId, '❌ Please send it as a photo, not as a file.');
+    return true;
+  }
+
+  await setPreorderCustom({ photoFileId: msg.photo[msg.photo.length - 1].file_id });
+  await clearAdminState(userId);
+
+  try {
+    await bot.deleteMessage(chatId, msg.message_id);
+  } catch (error) {
+    log('warn', 'preorder_photo_input_delete_failed', { error: error.message });
+  }
+
+  await showPreorderPostMenu(bot, chatId, userId, await applyPreorderCustomChange(bot));
+  return true;
+}
 
 async function showMainAdminMenu(bot, chatId, userId) {
   await reloadAdminIds();
@@ -703,6 +920,42 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
       const halls = await getHalls();
       await updateMenuMessage(bot, chatId, userId, menuTexts.manageHallsText(halls), keyboards.manageHallsKeyboard());
       await refreshPreorderPost(bot);
+      return true;
+    }
+
+    if (state === STATES.EDIT_PREORDER_TEXT) {
+      const customText = String(text || '').trim();
+
+      if (!customText) {
+        await bot.sendMessage(chatId, '❌ Please send the text as a message (or tap Back).');
+        return true;
+      }
+
+      if (customText.length > PREORDER_CUSTOM_TEXT_MAX_LENGTH) {
+        await bot.sendMessage(
+          chatId,
+          `❌ That's ${customText.length} characters - please keep it to ${PREORDER_CUSTOM_TEXT_MAX_LENGTH} or fewer.`
+        );
+        return true;
+      }
+
+      await setPreorderCustom({ text: customText });
+      await clearAdminState(userId);
+
+      // Same tidy-up as the stock prompts: the self-editing menu now shows
+      // the saved text, so the typed message itself isn't needed.
+      try {
+        await bot.deleteMessage(chatId, messageId);
+      } catch (error) {
+        log('warn', 'preorder_text_input_delete_failed', { error: error.message });
+      }
+
+      await showPreorderPostMenu(bot, chatId, userId, await applyPreorderCustomChange(bot));
+      return true;
+    }
+
+    if (state === STATES.ATTACH_PREORDER_PHOTO) {
+      await bot.sendMessage(chatId, '🖼 Please send a photo for the preorder post (or tap Back).');
       return true;
     }
 
@@ -1633,6 +1886,10 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     return true;
   }
 
+  if (await handlePreorderPostCallback(bot, query, chatId, userId, data, answer)) {
+    return true;
+  }
+
   if (data === CALLBACKS.SETTINGS_MANAGE_HALLS) {
     await updateMenuMessage(
       bot, chatId, userId,
@@ -1882,13 +2139,14 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
     }
 
     const hallLabel = hall.shortName || hall.name;
-    const adminId = await getPreorderAdminTag();
-    const adminUsername = adminId ? await getAdminUsernameById(bot, adminId) : null;
-    const startUrl = postMode === 'preorder' ? await getBotStartUrl(bot) : '';
+
+    // The preorder post is the one with a menu, an ordering button and
+    // possibly an admin-attached photo; the other stages are plain one-liners.
+    const preorderContent = postMode === 'preorder' ? await renderPreorderContent(bot, hallLabel) : null;
 
     let text;
-    if (postMode === 'preorder') {
-      text = await buildPreorderMessageText(hallLabel, adminUsername);
+    if (preorderContent) {
+      text = preorderContent.text;
     } else if (postMode === 'get-ready') {
       text = `Get ready, ${hallLabel}`;
     } else if (postMode === 'here') {
@@ -1899,16 +2157,9 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
 
     let sent;
     try {
-      const button = buildPreorderStartButton(startUrl);
-      const options = postMode === 'preorder'
-        ? {
-          parse_mode: 'HTML',
-          disable_web_page_preview: true,
-          ...(button ? { reply_markup: button } : {}),
-        }
-        : {};
-
-      sent = await bot.sendMessage(channelId, text, options);
+      sent = preorderContent
+        ? await sendPreorderContent(bot, channelId, preorderContent)
+        : await bot.sendMessage(channelId, text, {});
     } catch (error) {
       log('error', 'dingo_post_failed', { hall: hallLabel, error: error.message });
       return { posted: false, reason: 'send_failed' };
@@ -1916,8 +2167,8 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
 
     const toDelete = await getDingoMsgIdsToDelete(postMode);
 
-    if (postMode === 'preorder') {
-      await recordPreorderPost(channelId, sent.message_id);
+    if (preorderContent) {
+      await recordPreorderPost(channelId, sent.message_id, preorderContent.photoFileId);
     } else {
       await recordDingoPost(postMode, sent.message_id);
     }
@@ -2783,4 +3034,10 @@ module.exports = {
   handleServeRemainingOpen,
   handleServeDropoffStart,
   handleAdminDropoffPhoto,
+  handleAdminPreorderPhoto,
+  handlePreorderPostCallback,
+  buildPreorderIntro,
+  renderPreorderContent,
+  getPreorderCustom,
+  PREORDER_CUSTOM_TEXT_MAX_LENGTH,
 };

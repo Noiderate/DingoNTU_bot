@@ -40,10 +40,16 @@ async function setDingoPosts(value) {
   return stateStore.set(stateStore.KEYS.dingoPosts(), value);
 }
 
-async function recordPreorderPost(channelId, msgId) {
+/**
+ * photoFileId records whether the live post is a photo (and which), so a
+ * refresh knows to edit its caption rather than its text, and to repost when
+ * an admin attaches, swaps or removes the photo.
+ */
+async function recordPreorderPost(channelId, msgId, photoFileId = null) {
   return stateStore.set(stateStore.KEYS.preorderPost(), {
     channelId: String(channelId),
     msgId,
+    photoFileId,
     contentHash: null,
   });
 }
