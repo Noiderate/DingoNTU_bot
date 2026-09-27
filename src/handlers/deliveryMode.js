@@ -226,6 +226,39 @@ async function advanceNextHallToPost(halls, currentHallId, currentMode) {
 }
 
 
+/**
+ * Halls whose "we are here" has already posted this round, i.e. the ones
+ * staff may still need a serve list for: a late order, or orders placed after
+ * the hall was reopened with Revert. Its serve list may have been deleted
+ * (it goes once everyone listed is served), and the "here" button that
+ * creates one never comes back once the sequencer has moved on.
+ */
+function visitedHalls(halls, sequencer) {
+  if (!halls.length || sequencer.mode === 'preorder') {
+    return [];
+  }
+
+  const index = sequencer.index % halls.length;
+
+  if (index === 0) {
+    // Get-ready wrapped back to the first hall = the whole round is done.
+    return sequencer.mode === 'get-ready' ? halls : [];
+  }
+
+  return halls.slice(0, index);
+}
+
+/**
+ * Whether last round's clean-up is still outstanding: Finish Delivery was
+ * tapped but its Reset wasn't (the one-time reset token is still issued), or
+ * a hall is still closed. Posting the preorder then would advertise halls
+ * customers can't actually order for - so it is refused until Reset runs.
+ */
+async function isResetRequired(halls, blocked) {
+  const token = await stateStore.get(stateStore.KEYS.resetToken(), null);
+  return Boolean(token) || halls.some(hall => blocked.isBlocked(hall.name));
+}
+
 // --- Menu rendering ----------------------------------------------------------
 
 async function getDeliveryModeView() {
@@ -259,15 +292,23 @@ async function getDeliveryModeView() {
   const roundOver = halls.length > 1 && mode === 'get-ready' && nextHallToPost === halls[0];
   const showFinish = allHallsBlocked || roundOver;
 
+  const resetRequired = mode === 'preorder' && await isResetRequired(halls, blocked);
+
+  const serveListHalls = visitedHalls(halls, await getSequencer())
+    .map(hall => ({ hall, count: orders.filter(order => order.hallName === hall.name).length }))
+    .filter(entry => entry.count > 0);
+
   return {
     text: menuTexts.deliveryModeText(halls, orders, foodItems, {
       nextHallToPost,
       mode,
       gatingHall,
       gatingProgress,
+      resetRequired,
     }),
     keyboard: keyboards.deliveryModeKeyboard(
-      nextHallToPost, mode, blocked.last, showFinish, hallHasNoOrders, comingNeedsManualPost
+      nextHallToPost, mode, blocked.last, showFinish, hallHasNoOrders, comingNeedsManualPost,
+      { resetRequired, serveListHalls }
     ),
   };
 }
@@ -382,6 +423,8 @@ module.exports = {
   isExpectedNextHallToPost,
   getNextHallToPostState,
   getGatingHall,
+  visitedHalls,
+  isResetRequired,
   recordDingoPost,
   getDingoMsgIdsToDelete,
   consumeTrackedDingoMessageIds,

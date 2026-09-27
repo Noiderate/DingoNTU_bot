@@ -78,6 +78,13 @@ npm run webhook:info            # url set, pending 0, no last_error
       again makes the older Reset button say it is outdated.
 - [ ] After the last hall's *we are here*, **Revert** the last hall: Finish
       Delivery is still offered.
+- [ ] After Finish Delivery, *without* resetting, reopen Delivery Mode: the
+      preorder button is replaced by **Reset Halls and Orders first**, and
+      `/skip` refuses to post the preorder. After the reset it's back.
+- [ ] Revert a hall the delivery has already passed and order for it: a
+      **📋 Serve list** button for that hall appears in the delivery menu and
+      sends its list (nothing is posted to the channel). Serving that order
+      does **not** trigger the current hall's get-ready/coming posts.
 - [ ] With the serve list open, place an order from another account: the
       delivery menu and serve list update in place (no delete/resend, no new
       notification).

@@ -237,7 +237,10 @@ function deliveryModeText(halls, orders, foodItems = [], stage = {}) {
   }
 
   const gatingLine = gatingStageLine(stage);
-  const sections = [stockSection, ...(gatingLine ? [gatingLine] : [])];
+  const resetLine = stage.resetRequired
+    ? "⚠️ Last round hasn't been reset yet. Reset Halls and Orders before posting tonight's preorder."
+    : null;
+  const sections = [stockSection, ...[gatingLine, resetLine].filter(Boolean)];
 
   if (halls.length === 0) {
     return `🚚 Delivery Mode\n\n${sections.join('\n\n')}\n\nNo halls available.`;

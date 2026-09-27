@@ -59,6 +59,9 @@ const CALLBACKS = {
   DELIVERY_MODE_SERVE_BACK_PREFIX: 'dmsb_',       // {hallName} -> back to the phone-number list
   DELIVERY_MODE_SERVE_REMAINING_PREFIX: 'dmsr_',  // {hallName} -> collated remaining items + customer list
   DELIVERY_MODE_SERVE_DROPOFF_PREFIX: 'dmsp_',    // {hallName}|{telegramUserId} -> start the drop-off photo relay
+  DELIVERY_MODE_SERVE_LIST_PREFIX: 'dmsl_',       // {hallName} -> (re)send that hall's serve list, no channel post
+  // Shown in place of the preorder button until last round has been reset.
+  DELIVERY_MODE_RESET_FIRST: 'delivery_mode_reset_first',
   DELIVERY_MODE_REVERT_BLOCK: 'delivery_mode_revert_block',
   DELIVERY_MODE_FINISH: 'delivery_mode_finish',
   // Reset flow, each carrying Finish Delivery's one-time token after a colon:

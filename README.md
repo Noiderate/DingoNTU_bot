@@ -116,7 +116,15 @@ clears the channel posts and resets the sequencer. Finish Delivery is offered
 once every hall is closed or the last hall's "we are here" has posted (so
 reverting a hall at the end of the night can't strand the menu). Its **Reset
 Halls and Orders** button asks for confirmation and only works once, for the
-latest Finish - an old leftover button can't wipe a later night.
+latest Finish - an old leftover button can't wipe a later night. Until that
+reset has run (or while any hall is still closed), the preorder post is
+refused and its button is replaced by **Reset Halls and Orders first**.
+
+Halls the delivery has already passed that still have unserved orders (a late
+order, or one placed after **Revert**) get a **📋 Serve list** button in the
+delivery menu, which brings back that hall's serve list without posting to the
+channel. Only the hall the next automatic post is waiting on can trigger it -
+serving at an earlier hall never fires the current hall's get-ready/coming.
 
 `Revert last blocked hall` and `Reset Halls` remain as manual overrides if the
 automatic closure needs undoing. **`/skip`**, sent by any admin, force-posts

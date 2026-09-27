@@ -253,9 +253,15 @@ const MANUALLY_POSTED_MODES = ['preorder', 'here'];
  * comingNeedsManualPost: true for the very first hall's 'coming' post, which
  * has no previous hall to auto-trigger off of (see getGatingHall in
  * deliveryMode.js) and so needs a manual button same as 'here' does.
+ *
+ * resetRequired: last round was never reset, so the preorder button is
+ * swapped for one that starts the reset (see deliveryMode.isResetRequired).
+ * serveListHalls: [{ hall, count }] for halls already visited this round that
+ * still have unserved orders - one button each to bring back their serve list.
  */
 function deliveryModeKeyboard(
-  nextHallToPost, nextHallToPostMode, lastBlockedHall, showFinish, hallHasNoOrders, comingNeedsManualPost = false
+  nextHallToPost, nextHallToPostMode, lastBlockedHall, showFinish, hallHasNoOrders, comingNeedsManualPost = false,
+  { resetRequired = false, serveListHalls = [] } = {}
 ) {
   const buttons = [];
   const canManuallyPost = nextHallToPost && (
@@ -263,7 +269,9 @@ function deliveryModeKeyboard(
     || (nextHallToPostMode === 'coming' && comingNeedsManualPost)
   );
 
-  if (canManuallyPost) {
+  if (canManuallyPost && nextHallToPostMode === 'preorder' && resetRequired) {
+    buttons.push([{ text: '🔄 Reset Halls and Orders first', callback_data: CALLBACKS.DELIVERY_MODE_RESET_FIRST }]);
+  } else if (canManuallyPost) {
     const postText = nextHallToPostMode === 'preorder'
       ? `Post preorder available message   `
       : nextHallToPostMode === 'coming'
@@ -296,6 +304,13 @@ function deliveryModeKeyboard(
     buttons.push([{
       text: `↩️ Revert ${lastBlockedHall}`,
       callback_data: CALLBACKS.DELIVERY_MODE_REVERT_BLOCK,
+    }]);
+  }
+
+  for (const { hall, count } of serveListHalls) {
+    buttons.push([{
+      text: `📋 Serve list: ${hall.shortName || hall.name} (${count})`,
+      callback_data: `${CALLBACKS.DELIVERY_MODE_SERVE_LIST_PREFIX}${hall.name}`,
     }]);
   }
 

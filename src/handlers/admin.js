@@ -28,6 +28,8 @@ const {
   advanceNextHallToPost,
   isExpectedNextHallToPost,
   getNextHallToPostState,
+  getGatingHall,
+  isResetRequired,
   recordDingoPost,
   getDingoMsgIdsToDelete,
   consumeTrackedDingoMessageIds,
@@ -846,6 +848,7 @@ async function handleSkipCommand(bot, chatId, userId) {
       locked: 'A delivery update is already being posted - try again in a moment.',
       hall_not_found: 'Hall not found - the halls list may have changed since this was queued.',
       stale: 'This has already moved on. Reopen Delivery Mode to see the current state.',
+      reset_required: "Last round hasn't been reset yet. Tap Reset Halls and Orders in Delivery Mode before posting the preorder.",
       no_channel: 'DINGO_CHANNEL_ID is not set in the environment.',
       send_failed: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.',
       sheets_unavailable: 'Could not read the menu from Google Sheets. Nothing was posted - try again in a moment.',
@@ -2014,6 +2017,14 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     return handleFinishDelivery(bot, query, chatId, userId);
   }
 
+  if (data === CALLBACKS.DELIVERY_MODE_RESET_FIRST) {
+    return handleResetFirst(bot, chatId, answer);
+  }
+
+  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_SERVE_LIST_PREFIX)) {
+    return handleServeListResend(bot, chatId, extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_SERVE_LIST_PREFIX), answer);
+  }
+
   if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_RESET_CONFIRM_PREFIX)) {
     const token = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_RESET_CONFIRM_PREFIX);
     return handleResetConfirm(bot, chatId, messageId, token, answer);
@@ -2132,6 +2143,13 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
       return { posted: false, reason: 'stale' };
     }
 
+    // Enforced here, not just by hiding the button: an old menu's button or
+    // /skip could still reach a preorder post before last round is reset.
+    if (postMode === 'preorder' && await isResetRequired(halls, await orderStore.loadBlockedHalls())) {
+      await refreshDeliveryModeMenus(bot);
+      return { posted: false, reason: 'reset_required' };
+    }
+
     const channelId = config.telegram.dingoChannelId;
 
     if (!channelId) {
@@ -2241,6 +2259,11 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
  * hall" back to the first hall once the last hall's "here" has posted, which
  * is the sign the round is over, not a genuine next hall to warn or block.
  * The admin ends the night with "Finish Delivery" instead.
+ *
+ * Only the hall the pending post is gated on can drive it. Serving a late
+ * order at an earlier hall (still listed, or reopened with Revert) used to
+ * measure THAT hall's progress - often 100% - and fire the current hall's
+ * get-ready/coming, closing ordering for the next hall far too early.
  */
 async function autoAdvanceDeliveryStage(bot, hallName) {
   const halls = await googleSheets.getHalls();
@@ -2259,8 +2282,10 @@ async function autoAdvanceDeliveryStage(bot, hallName) {
 
   for (let guard = 0; guard < 3; guard += 1) {
     const { hall: nextHall, mode } = await getNextHallToPostState(halls);
+    const gatingHall = await getGatingHall(halls);
 
-    if (!nextHall || !meetsAutoPostThreshold(mode, progress.fraction)) {
+    if (!nextHall || !gatingHall || gatingHall.name !== hallName
+      || !meetsAutoPostThreshold(mode, progress.fraction)) {
       return;
     }
 
@@ -2295,6 +2320,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
       locked: { text: 'A delivery update is already being posted.' },
       hall_not_found: { text: 'Hall not found', show_alert: true },
       stale: { text: 'This button is outdated. Please use the latest delivery menu.', show_alert: true },
+      reset_required: { text: "Last round hasn't been reset yet. Reset Halls and Orders before posting the preorder.", show_alert: true },
       no_channel: { text: 'DINGO_CHANNEL_ID is not set in the environment.', show_alert: true },
       send_failed: { text: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.', show_alert: true },
       sheets_unavailable: { text: 'Could not read the menu from Google Sheets. Nothing was posted - try again in a moment.', show_alert: true },
@@ -2764,6 +2790,66 @@ async function refuseOutdatedReset(bot, chatId, messageId, answer) {
 }
 
 /**
+ * "Reset Halls and Orders first", shown instead of the preorder button while
+ * last round is still un-reset. Sends the usual reset prompt as its own
+ * message (the confirm flow deletes the message it runs from, which must not
+ * be the delivery menu), reusing Finish Delivery's token if one is still out
+ * so that button keeps working too.
+ */
+async function handleResetFirst(bot, chatId, answer) {
+  let token = await stateStore.get(stateStore.KEYS.resetToken(), null);
+
+  if (!token) {
+    token = crypto.randomUUID().slice(0, 12);
+    await stateStore.set(stateStore.KEYS.resetToken(), token);
+  }
+
+  await bot.sendMessage(
+    chatId,
+    "Last round hasn't been reset yet. Reset halls and orders before posting tonight's preorder:",
+    { reply_markup: resetPromptKeyboard(token) }
+  );
+  await answer();
+  return true;
+}
+
+/**
+ * "📋 Serve list: Hall X" - (re)send a visited hall's serve list without
+ * posting anything to the channel. The list is otherwise only created by that
+ * hall's "we are here" post, so late orders (or ones placed after Revert)
+ * had no way to be served once its list was gone.
+ */
+async function handleServeListResend(bot, chatId, hallName, answer) {
+  const hallOrders = await refreshHallServeOrdersCache(hallName);
+
+  if (!hallOrders.length) {
+    await answer(`No unserved orders left at ${hallName}.`);
+    await refreshDeliveryModeMenus(bot);
+    return true;
+  }
+
+  // One live list per hall: replace an older copy rather than leave two
+  // whose buttons race each other.
+  const previous = await getHallServeMessage(hallName);
+  if (previous) {
+    try {
+      await bot.deleteMessage(previous.chatId, previous.messageId);
+    } catch (error) {
+      log('warn', 'serve_list_previous_delete_failed', { hall: hallName, error: error.message });
+    }
+  }
+
+  const sent = await bot.sendMessage(
+    chatId,
+    HALL_SERVE_LIST_HEADER(hallName),
+    { reply_markup: buildHallCustomerListKeyboard(hallName, hallOrders) }
+  );
+  await recordHallServeMessage(hallName, chatId, sent.message_id);
+  await answer();
+  return true;
+}
+
+/**
  * First tap on "Reset Halls and Orders": spell out what it will do and ask
  * for a second, explicit tap. Reset closes every active order and rewrites
  * stock, so a stray tap must never be enough on its own.
@@ -2991,6 +3077,8 @@ module.exports = {
   handleSkipCommand,
   handleResetPrompt,
   handleResetConfirm,
+  handleResetFirst,
+  handleServeListResend,
   refreshPreorderPost,
   refreshHallServeOrdersMessage,
   refreshDeliveryModeMenus,
