@@ -81,6 +81,9 @@ screenshots are read automatically and either approved or sent to an admin.
 - **Manage Admins** — add, remove, and choose which admin is tagged in preorder posts
 - **Manage Food Items** — add, delete, edit stock for one item or all of them
 - **Manage Halls** — add and delete pickup halls
+- **Edit Dingo Post** — replace the preorder post's first line (`{hall}` fills
+  in the hall name) and optionally attach a photo, which turns the post into
+  that photo with the text as its caption. Nothing set = the default post.
 - **Delivery Mode** — the announcement sequencer and per-hall serve lists
 - **Stats** / **Reload Settings**
 
