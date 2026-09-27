@@ -906,7 +906,11 @@ An honest list.
 
 11. **`markOrderServed` allows serving an unpaid order.** Deliberate — staff
     physically hand food over and should not be blocked — but it means an unpaid
-    order can reach `served`. The payment state stays visible in the sheet.
+    order can reach `served`. The payment state stays visible in the sheet:
+    for a served order, "Paid"/"Unpaid" follows `paid_at`. **Mark Paid** on
+    such an order sets `paid_at` and keeps it `served`
+    (`repo.recordPaymentOnServedOrder`) — `served` is terminal; moving it back
+    to `paid` used to make it active again and re-list it for serving.
 
 12. ~~No manual override for get-ready/coming.~~ **Resolved 2026-09-18**: any
     admin can send `/skip` to force-post whatever the sequencer currently has

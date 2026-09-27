@@ -109,7 +109,11 @@ Closing a hall never touches a customer already mid-payment - only carts that
 were never confirmed into an order get cleared, with a message explaining why.
 The very last hall in the list never triggers this (there's no genuine "next
 hall" for it); the admin ends the night with **Finish Delivery** instead, which
-clears the channel posts and resets the sequencer.
+clears the channel posts and resets the sequencer. Finish Delivery is offered
+once every hall is closed or the last hall's "we are here" has posted (so
+reverting a hall at the end of the night can't strand the menu). Its **Reset
+Halls and Orders** button asks for confirmation and only works once, for the
+latest Finish - an old leftover button can't wipe a later night.
 
 `Revert last blocked hall` and `Reset Halls` remain as manual overrides if the
 automatic closure needs undoing. **`/skip`**, sent by any admin, force-posts

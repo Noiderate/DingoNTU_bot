@@ -73,6 +73,14 @@ npm run webhook:info            # url set, pending 0, no last_error
 - [ ] **Serve it.** Post *we are here*, tap the order button. Customer is told
       it was delivered; the button disappears.
 - [ ] **Finish Delivery** removes the channel posts and offers Reset Halls.
+- [ ] **Reset Halls** asks for confirmation first (counts of orders it will
+      close), and leaves orders awaiting payment review open. Tapping Finish
+      again makes the older Reset button say it is outdated.
+- [ ] After the last hall's *we are here*, **Revert** the last hall: Finish
+      Delivery is still offered.
+- [ ] With the serve list open, place an order from another account: the
+      delivery menu and serve list update in place (no delete/resend, no new
+      notification).
 
 ## 2. Payment edge cases
 
