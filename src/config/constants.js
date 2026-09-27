@@ -53,7 +53,11 @@ const CALLBACKS = {
   DELIVERY_MODE_SERVE_DROPOFF_PREFIX: 'dmsp_',    // {hallName}|{telegramUserId} -> start the drop-off photo relay
   DELIVERY_MODE_REVERT_BLOCK: 'delivery_mode_revert_block',
   DELIVERY_MODE_FINISH: 'delivery_mode_finish',
+  // Reset flow, each carrying Finish Delivery's one-time token after a colon:
+  // the first tap asks "are you sure", the second actually resets.
   DELIVERY_MODE_RESET_HALLS: 'delivery_mode_reset_halls',
+  DELIVERY_MODE_RESET_CONFIRM_PREFIX: 'dm_reset_yes:',
+  DELIVERY_MODE_RESET_CANCEL_PREFIX: 'dm_reset_no:',
 };
 
 /**

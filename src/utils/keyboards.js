@@ -219,7 +219,7 @@ const MANUALLY_POSTED_MODES = ['preorder', 'here'];
  * deliveryMode.js) and so needs a manual button same as 'here' does.
  */
 function deliveryModeKeyboard(
-  nextHallToPost, nextHallToPostMode, lastBlockedHall, allHallsBlocked, hallHasNoOrders, comingNeedsManualPost = false
+  nextHallToPost, nextHallToPostMode, lastBlockedHall, showFinish, hallHasNoOrders, comingNeedsManualPost = false
 ) {
   const buttons = [];
   const canManuallyPost = nextHallToPost && (
@@ -249,7 +249,7 @@ function deliveryModeKeyboard(
     }
   }
 
-  if (allHallsBlocked) {
+  if (showFinish) {
     buttons.push([{
       text: '✅ Finish Delivery',
       callback_data: CALLBACKS.DELIVERY_MODE_FINISH,
@@ -271,6 +271,7 @@ function deliveryModeKeyboard(
 }
 
 module.exports = {
+  createCallbackItemToken,
   mainMenuKeyboard,
   settingsMenuKeyboard,
   manageAdminsKeyboard,

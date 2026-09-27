@@ -1,4 +1,5 @@
-const { isAdmin, getHalls, getFoodItems, updateFoodItemStocksBatch, getAdminIds } = require('../services/googleSheets');
+const googleSheets = require('../services/googleSheets');
+const { isAdmin, updateFoodItemStocksBatch, getAdminIds } = require('../services/googleSheets');
 const { CALLBACKS } = require('../config/constants');
 const { hasPreorderPost } = require('./deliveryMode');
 const { editMessageTextSafely } = require('../utils/telegramEdits');
@@ -11,6 +12,7 @@ const orderActions = require('../services/orderActions');
 const { isImageDocument } = require('../utils/telegramFiles');
 const { config } = require('../config');
 const { toCents, formatCents } = require('../utils/money');
+const { createCallbackItemToken } = require('../utils/keyboards');
 const { formatSgtFriendly } = require('../utils/time');
 const { log } = require('../utils/logger');
 
@@ -190,7 +192,7 @@ async function showOrderScreen(bot, chatId, userId, messageId) {
     return;
   }
 
-  const foodItems = await getFoodItems();
+  const foodItems = await googleSheets.getFoodItemsOrThrow();
 
   await editMessageTextSafely(bot, buildOrderText(cart.hallName, foodItems, cart), {
     chat_id: chatId,
@@ -202,7 +204,42 @@ async function showOrderScreen(bot, chatId, userId, messageId) {
 
 // --- Commands ----------------------------------------------------------------
 
+const SHEETS_UNAVAILABLE_TEXT = "⚠️ We're having a temporary problem loading the menu. "
+  + 'Anything in your cart is still saved - please try again in a moment.';
+
+/**
+ * A Google Sheets read failing mid-flow used to look exactly like an empty
+ * sheet: no halls, no food, "the menu changed" and a cleared cart. The
+ * throwing readers flag it instead, and it is turned into a retry message
+ * here, with the cart left untouched.
+ */
 async function handleUserCommand(bot, msg) {
+  try {
+    return await routeUserCommand(bot, msg);
+  } catch (error) {
+    if (!googleSheets.isSheetsUnavailable(error)) {
+      throw error;
+    }
+    log('warn', 'sheets_unavailable', { error: error.message });
+    await bot.sendMessage(msg.chat.id, SHEETS_UNAVAILABLE_TEXT);
+    return true;
+  }
+}
+
+async function handleUserCallback(bot, query) {
+  try {
+    return await routeUserCallback(bot, query);
+  } catch (error) {
+    if (!googleSheets.isSheetsUnavailable(error)) {
+      throw error;
+    }
+    log('warn', 'sheets_unavailable', { error: error.message });
+    await answerOrSend(bot, query, SHEETS_UNAVAILABLE_TEXT, { show_alert: true });
+    return true;
+  }
+}
+
+async function routeUserCommand(bot, msg) {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const text = msg.text;
@@ -230,7 +267,7 @@ async function handleUserCommand(bot, msg) {
     }
 
     const blocked = await orderStore.loadBlockedHalls();
-    const halls = (await getHalls()).filter(hall => !blocked.isBlocked(hall.name));
+    const halls = (await googleSheets.getHallsOrThrow()).filter(hall => !blocked.isBlocked(hall.name));
 
     if (halls.length === 0) {
       await bot.sendMessage(chatId, 'No halls available for ordering right now. Please contact an admin.');
@@ -243,9 +280,10 @@ async function handleUserCommand(bot, msg) {
       + 'Note: If your usual pickup location is not listed, ordering for that hall has already closed.',
       {
         reply_markup: {
-          inline_keyboard: halls.map(hall => [
-            { text: hall.name, callback_data: `${USER_CALLBACKS.SELECT_HALL_PREFIX}${hall.id}` },
-          ]),
+          inline_keyboard: halls.map(hall => [{
+            text: hall.name,
+            callback_data: `${USER_CALLBACKS.SELECT_HALL_PREFIX}${hall.id}:${createCallbackItemToken(hall.name)}`,
+          }]),
         },
       }
     );
@@ -367,7 +405,7 @@ async function sendOrdersPage(bot, chatId, userId, page, messageId = null) {
 
 // --- Callbacks ---------------------------------------------------------------
 
-async function handleUserCallback(bot, query) {
+async function routeUserCallback(bot, query) {
   const chatId = query.message.chat.id;
   const userId = query.from.id;
   const data = query.data;
@@ -399,11 +437,15 @@ async function handleUserCallback(bot, query) {
 }
 
 async function handleSelectHall(bot, query, chatId, userId, data) {
-  const hallId = Number(data.slice(USER_CALLBACKS.SELECT_HALL_PREFIX.length));
-  const hall = (await getHalls()).find(entry => entry.id === hallId);
+  // A hall's id is its sheet row, so deleting a hall shifts every hall below
+  // it - the name token catches a button now pointing at a different hall.
+  // Buttons sent before the token existed carry none and are accepted as-is.
+  const [idValue, token] = data.slice(USER_CALLBACKS.SELECT_HALL_PREFIX.length).split(':');
+  const hallId = Number(idValue);
+  const hall = (await googleSheets.getHallsOrThrow()).find(entry => entry.id === hallId);
 
-  if (!hall) {
-    await answerCallbackSafely(bot, query.id, 'Hall not found', { show_alert: true });
+  if (!hall || (token && createCallbackItemToken(hall.name) !== token)) {
+    await answerCallbackSafely(bot, query.id, 'The hall list has changed. Please tap /start again.', { show_alert: true });
     return true;
   }
 
@@ -448,7 +490,7 @@ async function handleAddFood(bot, query, chatId, userId, data) {
     return true;
   }
 
-  const item = (await getFoodItems()).find(food => food.id === foodId);
+  const item = (await googleSheets.getFoodItemsOrThrow()).find(food => food.id === foodId);
 
   if (!item) {
     await answerCallbackSafely(bot, query.id, 'Food item not found', { show_alert: true });
@@ -542,7 +584,7 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
         return null;
       }
 
-      const liveItems = await getFoodItems();
+      const liveItems = await googleSheets.getFoodItemsOrThrow();
 
       // An item's id is its spreadsheet row number, so rows being deleted or
       // sorted while this cart was open would silently repoint it at different
@@ -603,12 +645,10 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
       const deducted = await updateFoodItemStocksBatch(stockUpdates);
 
       if (!deducted.success) {
-        await cartStore.clearItems(userId);
-        await answerCallbackSafely(bot, query.id);
-        await bot.sendMessage(
-          chatId,
-          '❌ An error has occurred. Your cart has been cleared. Please restart your order by typing /start.'
-        );
+        // The sheet write failed, so nothing was deducted - a Sheets outage,
+        // not a problem with the cart. Keep it so they can just tap again.
+        log('warn', 'stock_deduct_failed', { error: deducted.message });
+        await answerOrSend(bot, query, SHEETS_UNAVAILABLE_TEXT, { show_alert: true });
         return null;
       }
 
@@ -724,8 +764,7 @@ async function handleUserPhoto(bot, msg) {
   const order = await orderStore.getAwaitingPaymentOrder(userId);
 
   if (!order) {
-    // Matches the previous behaviour for an unexpected photo: ignore it.
-    return false;
+    return replyToReceiptWithoutPayableOrder(bot, msg);
   }
 
   if (order.status === STATUS.VERIFYING_PAYMENT) {
@@ -785,6 +824,78 @@ async function handleUserPhoto(bot, msg) {
   }
 
   return { submissionId: submitted.submission.id };
+}
+
+/**
+ * A screenshot arrived but nothing is awaiting payment. Usually the order
+ * expired moments earlier: the payment window is short and the sweeper runs
+ * every minute, so a slightly late screenshot almost always lands here - and
+ * used to be ignored, leaving someone who had actually paid with no reply.
+ *
+ * Returns true when it replied, false to leave the photo unhandled.
+ */
+async function replyToReceiptWithoutPayableOrder(bot, msg) {
+  if (!extractReceiptFile(msg)) {
+    return false;
+  }
+
+  const { orders } = await repo.getOrdersForCustomer(msg.from.id, { limit: 1 });
+  const latest = orders[0] ? orderStore.toOrder(orders[0]) : null;
+
+  if (!latest) {
+    // Admins send photos for their own reasons; don't lecture them.
+    if (isAdmin(msg.from.id)) {
+      return false;
+    }
+
+    await bot.sendMessage(msg.chat.id, "You don't have an order waiting for payment. Tap /start to place one.");
+    return true;
+  }
+
+  if (latest.status === STATUS.EXPIRED) {
+    await bot.sendMessage(msg.chat.id, orderActions.expiredOrderMessage(latest.code));
+    return true;
+  }
+
+  if (latest.status === STATUS.PAID || (latest.status === STATUS.SERVED && latest.paidAt)) {
+    await bot.sendMessage(msg.chat.id, `✅ Payment for Order ${latest.code} is already confirmed. Nothing more is needed.`);
+    return true;
+  }
+
+  if (latest.status === STATUS.SERVED) {
+    // Served before payment cleared, and the customer was asked to complete
+    // it. There is no automatic path from SERVED, so hand the screenshot
+    // straight to the admins with the same Mark Paid button they already use.
+    await forwardServedUnpaidReceipt(bot, latest, extractReceiptFile(msg).fileId);
+    await bot.sendMessage(msg.chat.id, `Thanks! An admin will confirm the payment for Order ${latest.code} shortly.`);
+    return true;
+  }
+
+  await bot.sendMessage(
+    msg.chat.id,
+    `Order ${latest.code} is not waiting for a payment screenshot (${STATUS_LABELS[latest.status] || latest.status}).\n\n`
+    + 'Tap /orders to see your orders, or /start to place a new one.'
+  );
+  return true;
+}
+
+async function forwardServedUnpaidReceipt(bot, order, fileId) {
+  const caption = `🧾 Payment screenshot for Order ${order.code} (served before payment)\n`
+    + `👤 ${orderActions.describeCustomer(order)}\n`
+    + `💰 Amount due: ${formatCents(order.totalCents)}\n\n`
+    + 'Check it and mark the order paid if it is correct.';
+
+  const keyboard = {
+    inline_keyboard: [[{ text: '✅ Mark Paid', callback_data: `${CALLBACKS.PAYMENT_ACCEPT_PREFIX}${order.id}` }]],
+  };
+
+  for (const adminId of googleSheets.getAdminIds()) {
+    try {
+      await bot.sendPhoto(adminId, fileId, { caption, reply_markup: keyboard });
+    } catch (error) {
+      log('warn', 'served_unpaid_receipt_forward_failed', { order_code: order.code, admin_id: adminId, error: error.message });
+    }
+  }
 }
 
 function extractReceiptFile(msg) {

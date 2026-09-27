@@ -1,4 +1,5 @@
-const { getFoodItems, updateFoodItemStocksBatch } = require('./googleSheets');
+const googleSheets = require('./googleSheets');
+const stateStore = require('./stateStore');
 const repo = require('./orderRepository');
 const orderStore = require('./orderStore');
 const { formatCents } = require('../utils/money');
@@ -18,40 +19,70 @@ const STATUS = repo.STATUS;
 /**
  * Return an order's items to the FoodAndStock sheet.
  *
- * Matches on the sheet row id first and falls back to the item name, because
- * row ids shift whenever staff insert, delete or sort rows in the sheet - see
- * MAINTENANCE.md "Row-number-as-ID".
+ * Matches on the sheet row id AND name first, falling back to the name alone,
+ * because row ids shift whenever staff insert, delete or sort rows in the
+ * sheet - see MAINTENANCE.md "Row-number-as-ID". A bare id match could add the
+ * stock to whichever food has since moved into that row.
+ *
+ * Runs under the same lock as checkout: both read the sheet's stock and write
+ * back a computed value, so interleaving them would silently lose one side's
+ * change (a lost restock, or a lost deduction and an oversell).
+ *
+ * Never throws; returns { success: false, message } instead.
  */
 async function restockOrder(order) {
   if (!order.items || !order.items.length) {
     return { success: true, restocked: 0 };
   }
 
-  const liveItems = await getFoodItems();
-  const updates = [];
+  try {
+    return await stateStore.withLock(stateStore.LOCKS.confirmOrder(), async () => {
+      const liveItems = await googleSheets.getFoodItemsOrThrow();
+      const updates = [];
 
-  for (const orderedItem of order.items) {
-    const liveItem = liveItems.find(item => item.id === orderedItem.id)
-      || liveItems.find(item => item.name === orderedItem.name);
+      for (const orderedItem of order.items) {
+        const liveItem = liveItems.find(item => item.id === orderedItem.id && item.name === orderedItem.name)
+          || liveItems.find(item => item.name === orderedItem.name);
 
-    if (!liveItem) {
-      return {
-        success: false,
-        message: `Cannot restore stock for ${orderedItem.name} - it is no longer in the sheet`,
-      };
-    }
+        if (!liveItem) {
+          return {
+            success: false,
+            message: `Cannot restore stock for ${orderedItem.name} - it is no longer in the sheet`,
+          };
+        }
 
-    updates.push({
-      rowId: liveItem.id,
-      newStock: (liveItem.stock || 0) + orderedItem.quantity,
+        updates.push({
+          rowId: liveItem.id,
+          newStock: (liveItem.stock || 0) + orderedItem.quantity,
+        });
+      }
+
+      const result = await googleSheets.updateFoodItemStocksBatch(updates);
+
+      return result.success
+        ? { success: true, restocked: updates.length }
+        : { success: false, message: result.message };
     });
+  } catch (error) {
+    return { success: false, message: error.message };
   }
+}
 
-  const result = await updateFoodItemStocksBatch(updates);
+/**
+ * The order's status has already changed, so a failed restock cannot be
+ * retried by re-running the action. Tell the admins exactly what to add back
+ * by hand rather than letting the stock silently go missing.
+ */
+async function alertRestockFailed(bot, order, message) {
+  log('error', 'restock_failed', { order_code: order.code, error: message });
 
-  return result.success
-    ? { success: true, restocked: updates.length }
-    : { success: false, message: result.message };
+  const items = (order.items || []).map(item => `• ${item.name} x${item.quantity}`).join('\n');
+  const text = `⚠️ Could not return stock for Order ${order.code} (${message}).\n\n`
+    + `Please add these back in the FoodAndStock sheet by hand:\n${items}`;
+
+  for (const adminId of googleSheets.getAdminIds()) {
+    await notify(bot, adminId, text);
+  }
 }
 
 async function notify(bot, chatId, text) {
@@ -73,14 +104,18 @@ async function notify(bot, chatId, text) {
  * them transitions the order and the other gets null back.
  */
 async function markOrderPaid(bot, order, { fromStatus, actor, actorTelegramId, reason }) {
-  const updated = await repo.transitionOrderStatus(
-    order.id,
-    fromStatus,
-    STATUS.PAID,
-    actor,
-    reason,
-    { actorTelegramId }
-  );
+  // A served order keeps its SERVED status and only gains paid_at - see
+  // repo.recordPaymentOnServedOrder for why it must not go back to PAID.
+  const updated = fromStatus === STATUS.SERVED
+    ? await repo.recordPaymentOnServedOrder(order.id, actor, reason, { actorTelegramId })
+    : await repo.transitionOrderStatus(
+      order.id,
+      fromStatus,
+      STATUS.PAID,
+      actor,
+      reason,
+      { actorTelegramId }
+    );
 
   if (!updated) {
     return null;
@@ -114,9 +149,14 @@ async function markOrderPaid(bot, order, { fromStatus, actor, actorTelegramId, r
 /**
  * Reject an order, restore its stock and tell the customer.
  *
- * Stock is restored BEFORE the status transition: if restocking fails we must
- * not have already marked the order rejected, or the items would be lost from
- * inventory with no record of why.
+ * The status transition comes FIRST and stock is only restored if it
+ * succeeded. The other way round, losing the transition race (an admin reject
+ * landing just as the verifier approves, say) left stock added back for an
+ * order that never actually left its old state - phantom stock, and
+ * overselling. A restock that fails after the transition is reported to the
+ * admins with the exact items to add back (see alertRestockFailed).
+ *
+ * Returns { success, order, restocked }.
  */
 async function rejectOrderAndRestock(bot, order, {
   fromStatus,
@@ -125,12 +165,6 @@ async function rejectOrderAndRestock(bot, order, {
   reason,
   customerMessage,
 }) {
-  const restock = await restockOrder(order);
-
-  if (!restock.success) {
-    return { success: false, message: restock.message };
-  }
-
   const updated = await repo.transitionOrderStatus(
     order.id,
     fromStatus,
@@ -146,6 +180,12 @@ async function rejectOrderAndRestock(bot, order, {
 
   const rejectedOrder = orderStore.toOrder(updated);
 
+  const restock = await restockOrder(rejectedOrder);
+
+  if (!restock.success) {
+    await alertRestockFailed(bot, rejectedOrder, restock.message);
+  }
+
   await notify(
     bot,
     rejectedOrder.chatId,
@@ -155,7 +195,7 @@ async function rejectOrderAndRestock(bot, order, {
 
   log('info', 'order_rejected', { order_code: rejectedOrder.code, actor, reason });
 
-  return { success: true, order: rejectedOrder };
+  return { success: true, order: rejectedOrder, restocked: restock.success };
 }
 
 /**
@@ -205,13 +245,10 @@ async function closeLeftoverOrder(bot, order) {
  * results in one of them getting `null` back, not a double-expiry.
  */
 async function expireOrder(bot, order) {
-  const restock = await restockOrder(order);
-
-  if (!restock.success) {
-    log('error', 'expire_restock_failed', { order_code: order.code, error: restock.message });
-    return null;
-  }
-
+  // Transition first, restock only if it won - see rejectOrderAndRestock.
+  // Restocking first double-counted stock whenever the sweeper and a late
+  // screenshot raced to expire the same order, or the customer's receipt
+  // moved it to verifying in between.
   const updated = await repo.transitionOrderStatus(
     order.id,
     STATUS.AWAITING_PAYMENT,
@@ -226,17 +263,24 @@ async function expireOrder(bot, order) {
 
   const expiredOrder = orderStore.toOrder(updated);
 
-  await notify(
-    bot,
-    expiredOrder.chatId,
-    `⌛ Order ${expiredOrder.code} has expired because a payment receipt was not received in time.\n\n`
-    + `The items have been returned to stock. Please create your order again by typing /start.\n\n`
-    + `If you have already made payment, recreate the same order and submit the screenshot of that payment. You do not need to pay again.`
-  );
+  const restock = await restockOrder(expiredOrder);
+
+  if (!restock.success) {
+    await alertRestockFailed(bot, expiredOrder, restock.message);
+  }
+
+  await notify(bot, expiredOrder.chatId, expiredOrderMessage(expiredOrder.code));
 
   log('info', 'order_expired', { order_code: expiredOrder.code });
 
   return expiredOrder;
+}
+
+/** Also sent again if the customer sends a screenshot after the fact. */
+function expiredOrderMessage(orderCode) {
+  return `⌛ Order ${orderCode} has expired because a payment receipt was not received in time.\n\n`
+    + `The items have been returned to stock. Please create your order again by typing /start.\n\n`
+    + `If you have already made payment, recreate the same order and submit the screenshot of that payment. You do not need to pay again.`;
 }
 
 /** Shared summary block used in customer and admin messages. */
@@ -258,6 +302,8 @@ module.exports = {
   rejectOrderAndRestock,
   closeLeftoverOrder,
   expireOrder,
+  expiredOrderMessage,
+  alertRestockFailed,
   buildOrderSummary,
   describeCustomer,
   notify,

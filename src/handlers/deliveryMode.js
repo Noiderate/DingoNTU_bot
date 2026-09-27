@@ -1,4 +1,4 @@
-const { getHalls, getFoodItems } = require('../services/googleSheets');
+const googleSheets = require('../services/googleSheets');
 const keyboards = require('../utils/keyboards');
 const menuTexts = require('../utils/menuTexts');
 const orderStore = require('../services/orderStore');
@@ -223,8 +223,8 @@ async function advanceNextHallToPost(halls, currentHallId, currentMode) {
 // --- Menu rendering ----------------------------------------------------------
 
 async function getDeliveryModeView() {
-  const halls = await getHalls();
-  const foodItems = await getFoodItems();
+  const halls = await googleSheets.getHalls();
+  const foodItems = await googleSheets.getFoodItems();
   const orders = await orderStore.getActiveOrders();
   const blocked = await orderStore.loadBlockedHalls();
 
@@ -244,6 +244,15 @@ async function getDeliveryModeView() {
     ? !orders.some(order => order.hallName === nextHallToPost.name)
     : false;
 
+  // The sequencer wrapping back to the first hall's get-ready means the last
+  // hall's "here" has posted - the round is over (see getGatingHall). Finish
+  // Delivery must be offered then even if a hall has since been reverted
+  // (unblocked): nothing re-blocks it, and the wrapped get-ready has no button
+  // of its own, so gating Finish on "every hall blocked" alone left the admin
+  // with no way forward at all.
+  const roundOver = halls.length > 1 && mode === 'get-ready' && nextHallToPost === halls[0];
+  const showFinish = allHallsBlocked || roundOver;
+
   return {
     text: menuTexts.deliveryModeText(halls, orders, foodItems, {
       nextHallToPost,
@@ -252,7 +261,7 @@ async function getDeliveryModeView() {
       gatingProgress,
     }),
     keyboard: keyboards.deliveryModeKeyboard(
-      nextHallToPost, mode, blocked.last, allHallsBlocked, hallHasNoOrders, comingNeedsManualPost
+      nextHallToPost, mode, blocked.last, showFinish, hallHasNoOrders, comingNeedsManualPost
     ),
   };
 }
@@ -288,13 +297,22 @@ async function listDeliveryModeViewers() {
     .filter(viewer => viewer.chatId);
 }
 
-async function sendDeliveryModeMenu(bot, chatId, userId) {
+/**
+ * moveToBottom: when the admin opens the menu themselves, it is reposted to
+ * the bottom of the chat if newer messages have pushed it up. Background
+ * refreshes (a new order, a payment, a served tap) pass false and always edit
+ * in place - reposting on every refresh deleted and resent both this menu and
+ * the hall serve list below it each time, spamming notifications and pulling
+ * buttons out from under the admin's thumb mid-tap.
+ */
+async function sendDeliveryModeMenu(bot, chatId, userId, { moveToBottom = true } = {}) {
   const { text, keyboard } = await getDeliveryModeView();
   const currentMessageId = await getMenuMessageId(userId);
 
-  // Edit in place while the menu is still the newest message in the chat;
-  // otherwise repost so it stays at the bottom where the admin is looking.
-  if (currentMessageId && await isMessageLatestInChat(chatId, currentMessageId)) {
+  const editInPlace = currentMessageId
+    && (!moveToBottom || await isMessageLatestInChat(chatId, currentMessageId));
+
+  if (editInPlace) {
     try {
       await bot.editMessageText(text, {
         chat_id: chatId,
@@ -334,14 +352,15 @@ async function showDeliveryModeMenu(bot, chatId, userId) {
  * Re-render the delivery menu for every admin currently viewing it.
  *
  * Called after anything that changes what the menu shows, which is what
- * replaces the old 5-second polling loop.
+ * replaces the old 5-second polling loop. Always edits in place - see
+ * sendDeliveryModeMenu's moveToBottom.
  */
 async function refreshDeliveryModeMenus(bot) {
   const viewers = await listDeliveryModeViewers();
 
   for (const viewer of viewers) {
     try {
-      await sendDeliveryModeMenu(bot, viewer.chatId, viewer.userId);
+      await sendDeliveryModeMenu(bot, viewer.chatId, viewer.userId, { moveToBottom: false });
     } catch (error) {
       await clearDeliveryModeViewer(viewer.userId);
       log('warn', 'delivery_menu_refresh_failed', { error: error.message });

@@ -174,8 +174,55 @@ function gatingStageLine({ mode, gatingHall, gatingProgress } = {}) {
     + `${gatingHall.name} is served (${served}/${total} so far).`;
 }
 
+// Telegram rejects messages over 4096 characters - and a rejected edit or
+// send leaves the admin with no delivery menu at all. Kept under that with
+// room to spare for the header and stock sections.
+const DELIVERY_MENU_MAX_LENGTH = 3900;
+
+function formatDeliveryOrderLine(order) {
+  const handle = order.username
+    ? `@${order.username}`
+    : order.userName || `User ${order.userId}`;
+  const items = (order.items || [])
+    .map(i => `${i.name} x${i.quantity}`)
+    .join(', ');
+  const payStatus = order.status === 'paid' ? 'paid' : 'unpaid';
+  return `  ${handle} - ${items} (${payStatus})`;
+}
+
+function hallSummaryLine(hall, hallOrders) {
+  const paid = hallOrders.filter(order => order.status === 'paid').length;
+  return `🏢 ${hall.name}: ${hallOrders.length} order(s) - ${paid} paid, ${hallOrders.length - paid} unpaid`;
+}
+
 /**
- * Delivery mode menu text — lists halls with orders grouped underneath
+ * Detailed section for one hall, listing as many orders as fit in `budget`
+ * characters and summarising the rest as "…and N more".
+ */
+function detailedHallSection(hall, hallOrders, budget = Infinity) {
+  let section = `🏢 ${hall.name}`;
+
+  for (let index = 0; index < hallOrders.length; index += 1) {
+    const line = `\n${formatDeliveryOrderLine(hallOrders[index])}`;
+    const remaining = hallOrders.length - index - 1;
+    const moreNote = remaining > 0 ? `\n  …and ${remaining} more` : '';
+
+    if (section.length + line.length + moreNote.length > budget) {
+      return `${section}\n  …and ${hallOrders.length - index} more`;
+    }
+
+    section += line;
+  }
+
+  return section;
+}
+
+/**
+ * Delivery mode menu text — lists halls with orders grouped underneath.
+ *
+ * On a busy night every order no longer fits in one Telegram message, so it
+ * falls back to one summary line per hall, keeping the full list only for
+ * the hall being served or up next (and trimming even that if needed).
  */
 function deliveryModeText(halls, orders, foodItems = [], stage = {}) {
   const remainingStockItems = (foodItems || []).filter(item => (item.stock || 0) > 0);
@@ -207,24 +254,33 @@ function deliveryModeText(halls, orders, foodItems = [], stage = {}) {
     return `🚚 Delivery Mode\n\n${sections.join('\n\n')}\n\nNo active orders.`;
   }
 
-  const hallSections = hallsWithOrders.map(({ hall, hallOrders }) => {
-    let section = `🏢 ${hall.name}`;
+  const header = `🚚 Delivery Mode\n\n${sections.join('\n\n')}\n\n`;
 
-    hallOrders.forEach(order => {
-      const handle = order.username
-        ? `@${order.username}`
-        : order.userName || `User ${order.userId}`;
-      const items = (order.items || [])
-        .map(i => `${i.name} x${i.quantity}`)
-        .join(', ');
-      const payStatus = order.status === 'paid' ? 'paid' : 'unpaid';
-      section += `\n  ${handle} - ${items} (${payStatus})`;
-    });
+  const full = header + hallsWithOrders
+    .map(({ hall, hallOrders }) => detailedHallSection(hall, hallOrders))
+    .join('\n\n\n');
 
-    return section;
-  });
+  if (full.length <= DELIVERY_MENU_MAX_LENGTH) {
+    return full;
+  }
 
-  return `🚚 Delivery Mode\n\n${sections.join('\n\n')}\n\n${hallSections.join('\n\n\n')}`;
+  // While a hall is being served the sequencer already points at the NEXT
+  // hall's get-ready/coming - the one being served is the gating hall.
+  const focusHall = stage.gatingHall || stage.nextHallToPost;
+  const focusName = focusHall ? focusHall.name : null;
+  const summaries = hallsWithOrders
+    .filter(({ hall }) => hall.name !== focusName)
+    .map(({ hall, hallOrders }) => hallSummaryLine(hall, hallOrders));
+  const focus = hallsWithOrders.find(({ hall }) => hall.name === focusName);
+
+  const summaryText = summaries.join('\n');
+  const fixed = header + summaryText + (focus ? '\n\n\n' : '');
+  const focusText = focus
+    ? detailedHallSection(focus.hall, focus.hallOrders, DELIVERY_MENU_MAX_LENGTH - fixed.length)
+    : '';
+
+  return `${header}${focusText}${focus && summaryText ? '\n\n\n' : ''}${summaryText}`
+    .slice(0, DELIVERY_MENU_MAX_LENGTH);
 }
 
 /**

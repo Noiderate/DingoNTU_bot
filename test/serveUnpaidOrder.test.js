@@ -23,8 +23,8 @@ test('an unpaid order can transition straight to served, in every unpaid active 
   }
 });
 
-test('a served order can still be reconciled as paid, but never restocked via reject', () => {
-  assert.deepEqual(repo.ALLOWED_TRANSITIONS[STATUS.SERVED], [STATUS.PAID]);
+test('a served order is terminal: never moved back to paid (which would re-list it) nor restocked via reject', () => {
+  assert.deepEqual(repo.ALLOWED_TRANSITIONS[STATUS.SERVED], []);
 });
 
 test('markOrderServed reports whether the order was still unpaid at serve time', async t => {
@@ -105,8 +105,11 @@ test('markOrderServed returns null, not a partial result, when the transition is
 });
 
 test('reconciling a served order tells the customer payment is confirmed, not "being prepared"', async t => {
-  t.mock.method(repo, 'transitionOrderStatus', async () => (
-    { id: 'o4', order_code: 'DG1', chat_id: 555, total_cents: 500, order_items: [], customers: {} }
+  t.mock.method(repo, 'transitionOrderStatus', async () => {
+    throw new Error('a served order must not change status when its payment is reconciled');
+  });
+  t.mock.method(repo, 'recordPaymentOnServedOrder', async () => (
+    { id: 'o4', status: STATUS.SERVED, order_code: 'DG1', chat_id: 555, total_cents: 500, order_items: [], customers: {} }
   ));
 
   const messages = [];
@@ -119,6 +122,20 @@ test('reconciling a served order tells the customer payment is confirmed, not "b
   assert.equal(messages.length, 1);
   assert.match(messages[0].text, /confirmed/i);
   assert.doesNotMatch(messages[0].text, /being prepared/i);
+});
+
+test('reconciling a served order twice confirms it only once', async t => {
+  t.mock.method(repo, 'recordPaymentOnServedOrder', async () => null); // paid_at already set
+
+  const messages = [];
+  const bot = { async sendMessage(chatId, text) { messages.push({ chatId, text }); } };
+
+  const result = await orderActions.markOrderPaid(bot, { id: 'o4' }, {
+    fromStatus: STATUS.SERVED, actor: 'admin', actorTelegramId: 1, reason: 'test',
+  });
+
+  assert.equal(result, null);
+  assert.equal(messages.length, 0);
 });
 
 test('accepting payment for a still-in-flight order keeps the normal "being prepared" message', async t => {

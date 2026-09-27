@@ -6,7 +6,7 @@ const {
   batchUpdateSpreadsheet,
 } = require('./googleSheets');
 const { getSupabase, unwrap } = require('./supabase');
-const { STATUS_LABELS, PAYMENT_STATUS } = require('./sheetMirror');
+const { STATUS_LABELS, paymentStatusFor } = require('./sheetMirror');
 const { SGT } = require('../utils/time');
 const { log } = require('../utils/logger');
 const { config } = require('../config');
@@ -98,7 +98,7 @@ function buildOrderRow(order) {
     order.hall_name_snapshot || '',
     itemsSummary(order.order_items),
     STATUS_LABELS[order.status] || order.status,
-    PAYMENT_STATUS[order.status] || '',
+    paymentStatusFor(order),
   ];
 }
 

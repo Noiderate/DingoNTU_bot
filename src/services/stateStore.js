@@ -39,6 +39,10 @@ const KEYS = {
   // Chat/message id of the "Tap each order when served" list for a hall, so a
   // new order placed after "we are here" is posted can be added to it live.
   hallServeMessage: hallName => `delivery:serve_msg:${hallName}`,
+  // One-time token issued by Finish Delivery and carried by its "Reset Halls
+  // and Orders" button. Reset only runs for the current token and consumes
+  // it, so a leftover button from an earlier night can't wipe a live round.
+  resetToken: () => 'delivery:reset_token',
   // The live preorder post being refreshed, and a hash of its rendered content
   // so an unchanged render skips the Telegram edit.
   preorderPost: () => 'delivery:preorder_post',
@@ -256,6 +260,8 @@ const LOCKS = {
   orderAction: orderId => `order:action:${orderId}`,
   // Serialises delivery-mode channel posts.
   deliveryPost: () => 'delivery:post',
+  // Makes consuming the reset token and running the reset one step.
+  deliveryReset: () => 'delivery:reset',
 };
 
 module.exports = {

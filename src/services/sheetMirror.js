@@ -72,6 +72,18 @@ const PAYMENT_STATUS = {
   expired: 'Unpaid',
 };
 
+/**
+ * PAYMENT_STATUS alone reports every served order as paid, but staff can hand
+ * food over before payment clears - and reconciling it afterwards records
+ * paid_at without leaving SERVED. For a served order, paid_at is the truth.
+ */
+function paymentStatusFor(order) {
+  if (order.status === 'served') {
+    return order.paid_at ? 'Paid' : 'Unpaid';
+  }
+  return PAYMENT_STATUS[order.status] || '';
+}
+
 // Best-effort, per-instance only. Several Vercel instances each keep their own
 // copy and staff can re-sort the sheet underneath us, so every hit is verified
 // against the sheet before it is used and discarded when it does not match.
@@ -142,7 +154,7 @@ function buildRow(order, submission) {
     formatSgt(order.admin_confirmed_at),                 // K
     order.order_code,                                    // L
     STATUS_LABELS[order.status] || order.status,         // M
-    PAYMENT_STATUS[order.status] || '',                  // N
+    paymentStatusFor(order),                             // N
     submission ? submission.outcome : '',                // O
     submission ? (submission.outcome_reasons || []).join(', ') : '', // P
     formatSgt(order.paid_at),                            // Q
@@ -390,6 +402,7 @@ module.exports = {
   HEADERS,
   STATUS_LABELS,
   PAYMENT_STATUS,
+  paymentStatusFor,
   ensureHeaders,
   buildRow,
   findRowByOrderCode,

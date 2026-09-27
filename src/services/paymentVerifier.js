@@ -190,6 +190,26 @@ async function downloadTelegramFile(bot, fileId) {
   return Buffer.from(await response.arrayBuffer());
 }
 
+/**
+ * The image type, read from the file's own signature bytes. Telegram photos
+ * are always JPEG, but a receipt sent as a file (to avoid compression) is
+ * often a PNG screenshot - and the mime type reported at upload isn't kept,
+ * so labelling everything JPEG sent PNGs to the model and storage mislabelled.
+ */
+function detectImageMimeType(buffer) {
+  if (buffer && buffer.length >= 8
+    && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return 'image/png';
+  }
+
+  if (buffer && buffer.length >= 12
+    && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') {
+    return 'image/webp';
+  }
+
+  return 'image/jpeg';
+}
+
 function extensionFor(mimeType) {
   if (mimeType === 'image/png') return 'png';
   if (mimeType === 'image/webp') return 'webp';
@@ -535,11 +555,10 @@ async function processSubmission(bot, submissionId, {
 
   try {
     // --- Evidence ---
-    let imageBuffer;
-    let mimeType = 'image/jpeg';
+    const imageBuffer = await downloadTelegramFile(bot, submission.telegram_file_id);
+    const mimeType = detectImageMimeType(imageBuffer);
 
     if (!submission.storage_path) {
-      imageBuffer = await downloadTelegramFile(bot, submission.telegram_file_id);
       const sha256 = crypto.createHash('sha256').update(imageBuffer).digest('hex');
 
       const storagePath = repo.buildReceiptPath({
@@ -568,8 +587,6 @@ async function processSubmission(bot, submissionId, {
         // Gemini verification failure.
         return await handleDuplicateImage(bot, { order, submission, storagePath, sha256 });
       }
-    } else {
-      imageBuffer = await downloadTelegramFile(bot, submission.telegram_file_id);
     }
 
     // --- Extraction, with retry ---
@@ -789,4 +806,5 @@ module.exports = {
   buildAdminReviewCaption,
   claimAndRecord,
   handleDuplicateImage,
+  detectImageMimeType,
 };

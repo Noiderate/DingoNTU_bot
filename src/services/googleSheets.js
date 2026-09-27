@@ -353,23 +353,48 @@ function parseFoodItemRows(values) {
 }
 
 /**
- * Read all food items from FoodAndStock sheet
+ * Read all food items from FoodAndStock sheet.
+ *
+ * Returns [] on a read failure, which is indistinguishable from a genuinely
+ * empty menu. Anywhere "empty" would do damage (editing the public post to
+ * "no food available", clearing a customer's cart as "the menu changed")
+ * must use getFoodItemsOrThrow instead.
  */
 async function getFoodItems() {
   try {
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-    const range = 'FoodAndStock!A2:C'; // Start from A2 (skip header)
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range,
-    });
-
-    return parseFoodItemRows(response.data.values || []);
+    return await getFoodItemsOrThrow();
   } catch (error) {
     console.error('Error reading food items:', error.message);
     return [];
   }
+}
+
+async function getFoodItemsOrThrow() {
+  const values = await readSheetValues('FoodAndStock!A2:C'); // Start from A2 (skip header)
+  return parseFoodItemRows(values);
+}
+
+/**
+ * Read a range, tagging any failure with code SHEETS_UNAVAILABLE so handlers
+ * can tell "Google Sheets is having a moment" (tell the user to retry, keep
+ * their cart) apart from a real bug.
+ */
+async function readSheetValues(range) {
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+      range,
+    });
+    return response.data.values || [];
+  } catch (error) {
+    const unavailable = new Error(`Google Sheets read failed (${range}): ${error.message}`);
+    unavailable.code = 'SHEETS_UNAVAILABLE';
+    throw unavailable;
+  }
+}
+
+function isSheetsUnavailable(error) {
+  return Boolean(error) && error.code === 'SHEETS_UNAVAILABLE';
 }
 
 /**
@@ -548,23 +573,21 @@ function parseHallRows(values) {
 }
 
 /**
- * Read all halls from Hall sheet
+ * Read all halls from Hall sheet. Returns [] on a read failure - see
+ * getFoodItems for when to use getHallsOrThrow instead.
  */
 async function getHalls() {
   try {
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-    const range = 'Hall!A2:B'; // Start from A2 (skip header)
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range,
-    });
-
-    return parseHallRows(response.data.values || []);
+    return await getHallsOrThrow();
   } catch (error) {
     console.error('Error reading halls:', error.message);
     return [];
   }
+}
+
+async function getHallsOrThrow() {
+  const values = await readSheetValues('Hall!A2:B'); // Start from A2 (skip header)
+  return parseHallRows(values);
 }
 
 /**
@@ -601,10 +624,12 @@ async function deleteHall(rowId) {
   try {
     const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
 
-    // Read all halls
+    // Read, clear and rewrite name AND short name together. Shifting only
+    // column A left every short name below the deleted hall paired with the
+    // wrong hall - and short names are what the channel posts show.
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: 'Hall!A2:A',
+      range: 'Hall!A2:B',
     });
 
     let halls = response.data.values || [];
@@ -622,7 +647,7 @@ async function deleteHall(rowId) {
     // Clear the entire range
     await sheets.spreadsheets.values.clear({
       spreadsheetId,
-      range: 'Hall!A2:A',
+      range: 'Hall!A2:B',
     });
 
     // Rewrite the remaining items
@@ -695,12 +720,15 @@ module.exports = {
   addAdmin,
   deleteAdmin,
   getFoodItems,
+  getFoodItemsOrThrow,
+  isSheetsUnavailable,
   parseFoodItemRows,
   addFoodItem,
   deleteFoodItem,
   updateFoodItemStock,
   updateFoodItemStocksBatch,
   getHalls,
+  getHallsOrThrow,
   parseHallRows,
   addHall,
   deleteHall,

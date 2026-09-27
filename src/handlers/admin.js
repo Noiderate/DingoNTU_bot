@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const googleSheets = require('../services/googleSheets');
 const {
   isAdmin, getAdminIds, reloadAdminIds, addAdmin, deleteAdmin,
@@ -57,6 +58,15 @@ async function setAdminState(userId, value) {
 
 async function clearAdminState(userId) {
   return stateStore.remove(stateStore.KEYS.adminInputState(userId));
+}
+
+/**
+ * Stock writes share checkout's lock: checkout reads stock and writes back a
+ * computed value, so an admin edit landing in between would otherwise be
+ * silently overwritten (or overwrite the checkout's deduction).
+ */
+function withStockLock(task) {
+  return stateStore.withLock(stateStore.LOCKS.confirmOrder(), task);
 }
 
 
@@ -308,7 +318,9 @@ function buildAvailableFoodLines(foodItems) {
 }
 
 async function buildPreorderMessageText(hallLabel, adminUsername) {
-  const foodItems = await getFoodItems();
+  // Throws rather than rendering "No food currently available" onto the public
+  // post whenever a Sheets read blips.
+  const foodItems = await googleSheets.getFoodItemsOrThrow();
   const contactLine = adminUsername
     ? `Or for any delivery related issues, message @${adminUsername}.`
     : 'Or for any delivery related issues, please contact an admin.';
@@ -330,13 +342,26 @@ async function buildPreorderMessageText(hallLabel, adminUsername) {
  * scheduled call is almost always free.
  */
 async function refreshPreorderPost(bot) {
+  try {
+    return await renderPreorderPost(bot);
+  } catch (error) {
+    if (!googleSheets.isSheetsUnavailable(error)) {
+      throw error;
+    }
+    // Leave the live post as it is; the next scheduled refresh retries.
+    log('warn', 'preorder_refresh_sheets_unavailable', { error: error.message });
+    return { skipped: 'sheets_unavailable' };
+  }
+}
+
+async function renderPreorderPost(bot) {
   const post = await getPreorderPost();
 
   if (!post.channelId || !post.msgId) {
     return { skipped: 'no_post' };
   }
 
-  const halls = await googleSheets.getHalls();
+  const halls = await googleSheets.getHallsOrThrow();
   const blocked = await orderStore.loadBlockedHalls();
   const nextHall = halls.find(hall => !blocked.isBlocked(hall.name));
 
@@ -430,17 +455,30 @@ async function repostPreorderAvailability(bot) {
     return;
   }
 
-  const halls = await googleSheets.getHalls();
-  const blocked = await orderStore.loadBlockedHalls();
-  const nextHall = halls.find(hall => !blocked.isBlocked(hall.name));
+  let nextHall;
+  let text;
+  try {
+    const halls = await googleSheets.getHallsOrThrow();
+    const blocked = await orderStore.loadBlockedHalls();
+    nextHall = halls.find(hall => !blocked.isBlocked(hall.name));
 
-  if (!nextHall) {
+    if (!nextHall) {
+      return;
+    }
+
+    const adminId = await googleSheets.getPreorderAdminTag();
+    const adminUsername = adminId ? await googleSheets.getAdminUsernameById(bot, adminId) : null;
+    text = await buildPreorderMessageText(nextHall.shortName || nextHall.name, adminUsername);
+  } catch (error) {
+    if (!googleSheets.isSheetsUnavailable(error)) {
+      throw error;
+    }
+    // Keep the existing post rather than replace it with an empty menu; the
+    // scheduled refresh brings it up to date once Sheets answers again.
+    log('warn', 'preorder_repost_sheets_unavailable', { error: error.message });
     return;
   }
 
-  const adminId = await googleSheets.getPreorderAdminTag();
-  const adminUsername = adminId ? await googleSheets.getAdminUsernameById(bot, adminId) : null;
-  const text = await buildPreorderMessageText(nextHall.shortName || nextHall.name, adminUsername);
   const startUrl = await getBotStartUrl(bot);
   const button = buildPreorderStartButton(startUrl);
 
@@ -593,6 +631,7 @@ async function handleSkipCommand(bot, chatId, userId) {
       stale: 'This has already moved on. Reopen Delivery Mode to see the current state.',
       no_channel: 'DINGO_CHANNEL_ID is not set in the environment.',
       send_failed: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.',
+      sheets_unavailable: 'Could not read the menu from Google Sheets. Nothing was posted - try again in a moment.',
     };
 
     await bot.sendMessage(chatId, `❌ ${FAILURE_MESSAGES[result.reason] || 'Could not post.'}`);
@@ -680,7 +719,7 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
 
     const beforeItem = (await getFoodItems()).find(item => item.id === state.foodItemId);
 
-    const result = await updateFoodItemStock(state.foodItemId, newStock);
+    const result = await withStockLock(() => updateFoodItemStock(state.foodItemId, newStock));
     const confirmation = await bot.sendMessage(chatId, result.message);
     await clearAdminState(userId);
 
@@ -722,7 +761,13 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
     }
 
     const currentItem = state.items[state.currentIndex];
-    await updateFoodItemStock(currentItem.id, newStock);
+    const saved = await withStockLock(() => updateFoodItemStock(currentItem.id, newStock));
+
+    // Stay on this item so the admin can retry, rather than silently moving on.
+    if (!saved.success) {
+      await bot.sendMessage(chatId, `${saved.message}\n\nPlease send the stock for ${currentItem.name} again.`);
+      return true;
+    }
 
     // Keeps the loop clean - only the self-editing prompt should remain
     // between steps, not a trail of the numbers typed along the way.
@@ -1201,14 +1246,14 @@ async function handleOrderReject(bot, query, chatId, userId, messageId, data) {
 
     await editMessageTextSafely(
       bot,
-      `${query.message.text}\n\n❌ Status: Rejected by admin ${userId}\n↩️ Stock restored`,
+      `${query.message.text}\n\n❌ Status: Rejected by admin ${userId}\n${restockNote(result)}`,
       { chat_id: chatId, message_id: messageId }
     ).catch(() => {});
 
     await refreshDeliveryModeMenus(bot);
     await refreshPreorderPost(bot);
 
-    await bot.answerCallbackQuery(query.id, { text: 'Order rejected and stock restored' });
+    await bot.answerCallbackQuery(query.id, { text: `Order rejected${result.restocked ? ' and stock restored' : ''}` });
     return true;
   });
 }
@@ -1292,7 +1337,7 @@ async function handlePaymentReject(bot, query, chatId, userId, messageId, data) 
     await recordManualReview(orderId, userId, 'manually_rejected');
     await updateReviewMessage(
       bot, query, chatId, messageId,
-      `\n\n❌ Payment rejected by admin ${userId}\n↩️ Stock restored`
+      `\n\n❌ Payment rejected by admin ${userId}\n${restockNote(result)}`
     );
     await refreshDeliveryModeMenus(bot);
     // The order was in the active set (payment_flagged/awaiting/verifying),
@@ -1300,9 +1345,14 @@ async function handlePaymentReject(bot, query, chatId, userId, messageId, data) 
     // now rather than waiting for the next unrelated order at that hall.
     await refreshHallServeOrdersMessage(bot, order.hallName);
 
-    await bot.answerCallbackQuery(query.id, { text: 'Payment rejected and stock restored' });
+    await bot.answerCallbackQuery(query.id, { text: `Payment rejected${result.restocked ? ' and stock restored' : ''}` });
     return true;
   });
+}
+
+/** Status line for a rejection's review message - see orderActions.alertRestockFailed. */
+function restockNote(result) {
+  return result.restocked ? '↩️ Stock restored' : '⚠️ Stock NOT restored - add it back by hand (details sent separately)';
 }
 
 /** Attribute a manual decision to the reviewing admin in the audit trail. */
@@ -1649,6 +1699,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
 
   if (data === CALLBACKS.SETTINGS_DELIVERY_MODE) {
     await showDeliveryModeMenu(bot, chatId, userId);
+    await repositionHallServeMessagesBelowMenu(bot, chatId);
     await answer();
     return true;
   }
@@ -1706,8 +1757,27 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     return handleFinishDelivery(bot, query, chatId, userId);
   }
 
-  if (data === CALLBACKS.DELIVERY_MODE_RESET_HALLS) {
-    return handleResetHallsAndOrders(bot, chatId, messageId, answer);
+  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_RESET_CONFIRM_PREFIX)) {
+    const token = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_RESET_CONFIRM_PREFIX);
+    return handleResetConfirm(bot, chatId, messageId, token, answer);
+  }
+
+  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_RESET_CANCEL_PREFIX)) {
+    const token = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_RESET_CANCEL_PREFIX);
+    await editMessageTextSafely(bot, FINISH_PROMPT_TEXT, {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: resetPromptKeyboard(token),
+    }).catch(() => {});
+    await answer('Reset cancelled.');
+    return true;
+  }
+
+  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_RESET_HALLS)) {
+    // Buttons sent before tokens existed carry none, and are refused like
+    // any other outdated one.
+    const token = data.slice(CALLBACKS.DELIVERY_MODE_RESET_HALLS.length + 1);
+    return handleResetPrompt(bot, chatId, messageId, token, answer);
   }
 
   return false;
@@ -1891,6 +1961,14 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
     }
 
     return { posted: true, text, hall, hallLabel };
+  } catch (error) {
+    // Only the preorder text reads the food list; better no post than one
+    // announcing "No food currently available" because a read blipped.
+    if (googleSheets.isSheetsUnavailable(error)) {
+      log('warn', 'dingo_post_sheets_unavailable', { error: error.message });
+      return { posted: false, reason: 'sheets_unavailable' };
+    }
+    throw error;
   } finally {
     if (holder) {
       await stateStore.releaseLock(stateStore.LOCKS.deliveryPost(), holder);
@@ -1968,6 +2046,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
       stale: { text: 'This button is outdated. Please use the latest delivery menu.', show_alert: true },
       no_channel: { text: 'DINGO_CHANNEL_ID is not set in the environment.', show_alert: true },
       send_failed: { text: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.', show_alert: true },
+      sheets_unavailable: { text: 'Could not read the menu from Google Sheets. Nothing was posted - try again in a moment.', show_alert: true },
     };
 
     await bot.answerCallbackQuery(query.id, FAILURE_RESPONSES[result.reason] || { text: 'Could not post update.', show_alert: true });
@@ -2351,23 +2430,23 @@ async function refreshHallServeOrdersMessage(bot, hallName) {
 }
 
 /**
- * Keep every hall's "Tap a phone number" list sitting below the delivery
- * mode menu in its chat.
+ * Move this chat's hall "Tap a phone number" lists back below the delivery
+ * mode menu.
  *
- * The delivery menu re-pins itself to the bottom of the chat whenever it is
- * no longer the newest message there (see deliveryMode.sendDeliveryModeMenu) -
- * which, left alone, means it leapfrogs back below any serve list the moment
- * anything else is sent to that chat and the menu next refreshes. Called
- * straight after every menu refresh, this restores the serve list to the
- * bottom again so the delivery mode text is always the one on top.
+ * Only called when the admin opens the menu themselves, which may repost it
+ * to the bottom of the chat (see deliveryMode.sendDeliveryModeMenu) and so
+ * leapfrog it past a serve list. Background refreshes edit both messages in
+ * place instead and never call this - doing it on every refresh used to
+ * delete and resend both messages on every order, payment and served tap.
  */
-async function repositionHallServeMessagesBelowMenu(bot) {
+async function repositionHallServeMessagesBelowMenu(bot, chatId) {
   const halls = await getHalls();
 
   for (const hall of halls) {
     const tracked = await getHallServeMessage(hall.name);
 
-    if (!tracked || await isMessageLatestInChat(tracked.chatId, tracked.messageId)) {
+    if (!tracked || Number(tracked.chatId) !== Number(chatId)
+      || await isMessageLatestInChat(tracked.chatId, tracked.messageId)) {
       continue;
     }
 
@@ -2402,13 +2481,104 @@ async function repositionHallServeMessagesBelowMenu(bot) {
   }
 }
 
-/**
- * Wraps deliveryMode's own menu refresh so the hall serve list(s) always end
- * up repositioned below it afterwards - see repositionHallServeMessagesBelowMenu.
- */
+/** Background refresh of every open delivery menu, edited in place. */
 async function refreshDeliveryModeMenus(bot) {
   await refreshDeliveryModeMenusOnly(bot);
-  await repositionHallServeMessagesBelowMenu(bot);
+}
+
+const FINISH_PROMPT_TEXT = '✅ Delivery finished. Tap below to reset halls when you are ready.';
+
+function resetPromptKeyboard(token) {
+  return {
+    inline_keyboard: [[{
+      text: '🔄 Reset Halls and Orders',
+      callback_data: `${CALLBACKS.DELIVERY_MODE_RESET_HALLS}:${token}`,
+    }]],
+  };
+}
+
+async function isCurrentResetToken(token) {
+  const current = await stateStore.get(stateStore.KEYS.resetToken(), null);
+  return Boolean(token) && current === token;
+}
+
+async function refuseOutdatedReset(bot, chatId, messageId, answer) {
+  await answer('This reset button is outdated. Use Finish Delivery again if you need to reset.', { show_alert: true });
+  try {
+    await bot.deleteMessage(chatId, messageId);
+  } catch (error) {
+    log('warn', 'reset_prompt_delete_failed', { error: error.message });
+  }
+  return true;
+}
+
+/**
+ * First tap on "Reset Halls and Orders": spell out what it will do and ask
+ * for a second, explicit tap. Reset closes every active order and rewrites
+ * stock, so a stray tap must never be enough on its own.
+ */
+async function handleResetPrompt(bot, chatId, messageId, token, answer) {
+  if (!await isCurrentResetToken(token)) {
+    return refuseOutdatedReset(bot, chatId, messageId, answer);
+  }
+
+  const orders = await orderStore.getActiveOrders();
+  const inReview = orders.filter(order => (
+    order.status === STATUS.PAYMENT_FLAGGED || order.status === STATUS.VERIFYING_PAYMENT
+  )).length;
+  const paid = orders.filter(order => order.status === STATUS.PAID).length;
+  const unpaid = orders.length - inReview - paid;
+
+  const lines = [
+    '⚠️ Reset halls and orders?',
+    '',
+    'This will:',
+    `• close ${unpaid} unpaid order(s) and return their stock`,
+    `• mark ${paid} paid but unserved order(s) as served`,
+    '• put stock back to its opening levels',
+    '• reopen ordering for every hall',
+  ];
+
+  if (inReview) {
+    lines.push('', `${inReview} order(s) with a payment awaiting review will be left open.`);
+  }
+
+  await editMessageTextSafely(bot, lines.join('\n'), {
+    chat_id: chatId,
+    message_id: messageId,
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✅ Yes, reset', callback_data: `${CALLBACKS.DELIVERY_MODE_RESET_CONFIRM_PREFIX}${token}` },
+        { text: '✖️ Cancel', callback_data: `${CALLBACKS.DELIVERY_MODE_RESET_CANCEL_PREFIX}${token}` },
+      ]],
+    },
+  });
+  await answer();
+  return true;
+}
+
+/**
+ * Second tap: consume the token and reset. The lock makes check-and-consume
+ * one step, so a double tap (or two admins) cannot run the reset twice.
+ */
+async function handleResetConfirm(bot, chatId, messageId, token, answer) {
+  const holder = await stateStore.acquireLock(stateStore.LOCKS.deliveryReset(), { leaseMs: 120000 });
+
+  if (!holder) {
+    await answer('A reset is already running.');
+    return true;
+  }
+
+  try {
+    if (!await isCurrentResetToken(token)) {
+      return await refuseOutdatedReset(bot, chatId, messageId, answer);
+    }
+
+    await stateStore.remove(stateStore.KEYS.resetToken());
+    return await handleResetHallsAndOrders(bot, chatId, messageId, answer);
+  } finally {
+    await stateStore.releaseLock(stateStore.LOCKS.deliveryReset(), holder);
+  }
 }
 
 /**
@@ -2435,8 +2605,18 @@ async function handleResetHallsAndOrders(bot, chatId, messageId, answer) {
 
   const leftoverOrders = await orderStore.getActiveOrders();
   const closedSummaries = [];
+  const awaitingReview = [];
 
   for (const order of leftoverOrders) {
+    // A receipt still being checked, or waiting on an admin, means the
+    // customer has most likely paid. Closing it as "round ended before
+    // payment was completed" (and restocking) was both wrong and a lost
+    // payment - leave it for its review card instead.
+    if (order.status === STATUS.PAYMENT_FLAGGED || order.status === STATUS.VERIFYING_PAYMENT) {
+      awaitingReview.push(`🏢 ${order.hallName}: ${order.code} - ${orderActions.describeCustomer(order)}`);
+      continue;
+    }
+
     const closed = await orderActions.closeLeftoverOrder(bot, order);
 
     if (closed) {
@@ -2471,9 +2651,9 @@ async function handleResetHallsAndOrders(bot, chatId, messageId, answer) {
   }
 
   if (stockChanges.length) {
-    await googleSheets.updateFoodItemStocksBatch(
+    await withStockLock(() => googleSheets.updateFoodItemStocksBatch(
       stockChanges.map(({ rowId, newStock }) => ({ rowId, newStock }))
-    );
+    ));
   }
 
   await setSequencer({ ...DEFAULT_SEQUENCER });
@@ -2497,6 +2677,10 @@ async function handleResetHallsAndOrders(bot, chatId, messageId, answer) {
     ? `\n\nStock reset to opening levels:\n${stockChanges.map(c => `${c.name}: ${c.oldStock} → ${c.newStock}`).join('\n')}`
     : '';
 
+  const reviewText = awaitingReview.length
+    ? `\n\n👀 Left open - payment still needs a decision (use each order's review card):\n${awaitingReview.join('\n')}`
+    : '';
+
   const noBaselineText = noBaselineItems.length
     ? `\n\n⚠️ No starting stock recorded for: ${noBaselineItems.join(', ')} - left unchanged.`
     : '';
@@ -2504,7 +2688,7 @@ async function handleResetHallsAndOrders(bot, chatId, messageId, answer) {
   await bot.sendMessage(
     chatId,
     '✅ Halls and orders have been reset. Orders are now available to be placed by any hall, '
-    + `starting from ${halls[0] ? halls[0].name : 'the first hall'}.${closedText}${stockText}${noBaselineText}`
+    + `starting from ${halls[0] ? halls[0].name : 'the first hall'}.${closedText}${reviewText}${stockText}${noBaselineText}`
   );
 
   return true;
@@ -2539,11 +2723,12 @@ async function handleFinishDelivery(bot, query, chatId, userId) {
 
   await clearDeliveryModeViewer(userId);
 
-  await bot.sendMessage(chatId, '✅ Delivery finished. Tap below to reset halls when you are ready.', {
-    reply_markup: {
-      inline_keyboard: [[{ text: '🔄 Reset Halls and Orders', callback_data: CALLBACKS.DELIVERY_MODE_RESET_HALLS }]],
-    },
-  });
+  // A fresh token per Finish: any reset button from an earlier Finish (or a
+  // second Finish tap) stops working, so only the newest one can reset.
+  const token = crypto.randomUUID().slice(0, 12);
+  await stateStore.set(stateStore.KEYS.resetToken(), token);
+
+  await bot.sendMessage(chatId, FINISH_PROMPT_TEXT, { reply_markup: resetPromptKeyboard(token) });
 
   await showMainAdminMenu(bot, chatId, userId);
   return true;
@@ -2553,6 +2738,8 @@ module.exports = {
   handleAdminCommand,
   handleAdminCallback,
   handleSkipCommand,
+  handleResetPrompt,
+  handleResetConfirm,
   refreshPreorderPost,
   refreshHallServeOrdersMessage,
   refreshDeliveryModeMenus,

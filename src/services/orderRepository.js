@@ -61,11 +61,11 @@ const ALLOWED_TRANSITIONS = {
     STATUS.SERVED,
   ],
   [STATUS.PAID]: [STATUS.SERVED, STATUS.REJECTED],
-  // Not fully terminal: an order served before payment cleared can still be
-  // reconciled once it does (see orderStore.markOrderServed and
-  // admin.js's handlePaymentAccept). Deliberately NOT reachable from REJECTED -
-  // rejecting restocks the items, which would be wrong for food already served.
-  [STATUS.SERVED]: [STATUS.PAID],
+  // Terminal. An order served before payment cleared is reconciled with
+  // recordPaymentOnServedOrder, which sets paid_at WITHOUT leaving SERVED -
+  // moving it back to PAID made it active again, so it reappeared in the
+  // hall's serve list waiting to be served a second time.
+  [STATUS.SERVED]: [],
   [STATUS.REJECTED]: [],
   [STATUS.CANCELLED]: [],
   [STATUS.EXPIRED]: [],
@@ -311,6 +311,46 @@ async function transitionOrderStatus(orderId, fromStatus, toStatus, actor, reaso
     orderId,
     fromStatus,
     toStatus,
+    actor,
+    actorTelegramId,
+    reason,
+  });
+
+  await enqueueSheetSync(orderId);
+
+  return rows[0];
+}
+
+/**
+ * Record payment for an order that was served before its payment cleared.
+ *
+ * The order stays SERVED (the food has changed hands; it must not re-enter
+ * the active set) and only gains paid_at. Conditional on paid_at still being
+ * null, so two admins tapping "Mark Paid" at once confirm it exactly once.
+ * Returns the updated row, or null if it was not an unpaid served order.
+ */
+async function recordPaymentOnServedOrder(orderId, actor, reason = null, { actorTelegramId = null } = {}) {
+  const supabase = getSupabase();
+
+  const rows = unwrap(
+    await supabase
+      .from('orders')
+      .update({ paid_at: new Date().toISOString() })
+      .eq('id', orderId)
+      .eq('status', STATUS.SERVED)
+      .is('paid_at', null)
+      .select(ORDER_SELECT),
+    'recordPaymentOnServedOrder'
+  );
+
+  if (!rows.length) {
+    return null;
+  }
+
+  await recordStatusHistory({
+    orderId,
+    fromStatus: STATUS.SERVED,
+    toStatus: STATUS.SERVED,
     actor,
     actorTelegramId,
     reason,
@@ -826,6 +866,7 @@ module.exports = {
   getOrderById,
   getOrderByCode,
   transitionOrderStatus,
+  recordPaymentOnServedOrder,
   recordStatusHistory,
   getActiveOrders,
   getActiveOrdersByHall,
