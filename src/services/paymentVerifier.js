@@ -379,17 +379,25 @@ async function applyOutcome(bot, { order, submission, decision, patch }) {
   }
 
   if (effectiveOutcome === OUTCOMES.INCOMPLETE_TRANSFER) {
-    // Stays payable: the customer can finish the transfer and resend.
+    // Stays payable: the customer can finish the transfer and resend. The
+    // payment deadline restarts (one more PAYMENT_WINDOW_MINUTES from now) -
+    // with the original deadline left alone, finishing the transfer and
+    // resending routinely landed after it and expired an order that was
+    // being paid.
     const reverted = await repo.transitionOrderStatus(
       order.id, STATUS.VERIFYING_PAYMENT, STATUS.AWAITING_PAYMENT,
-      'ai_verifier', 'Unfinished transfer screenshot'
+      'ai_verifier', 'Unfinished transfer screenshot',
+      { patch: { payment_due_at: new Date(Date.now() + config.payment.windowMinutes * 60 * 1000).toISOString() } }
     );
 
     // Someone/something else already moved the order on - telling the
     // customer to finish an unfinished transfer now would contradict
     // whatever verdict they already received.
     if (reverted) {
-      await deliverOutcomeMessage(bot, chatId, processingMessageId, MESSAGES.INCOMPLETE);
+      const deadlineNote = config.payment.expiryEnabled
+        ? `\n\n⏳ You have ${config.payment.windowMinutes} more minute(s) to send it.`
+        : '';
+      await deliverOutcomeMessage(bot, chatId, processingMessageId, MESSAGES.INCOMPLETE + deadlineNote);
     }
 
     return { outcome: effectiveOutcome };

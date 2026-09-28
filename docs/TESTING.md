@@ -92,7 +92,10 @@ npm run webhook:info            # url set, pending 0, no last_error
 ## 2. Payment edge cases
 
 - [ ] **"Review transfer" screenshot** → told it looks unfinished and asked for
-      the "Transfer Successful" screen. Order stays payable.
+      the "Transfer Successful" screen. Order stays payable, the message says
+      how many minutes they have, and the deadline restarts from then
+      (`PAYMENT_WINDOW_MINUTES`) - resending just after the original deadline
+      still verifies instead of expiring.
 - [ ] **Three unfinished attempts** → the third escalates to admin review
       (`MAX_INCOMPLETE_ATTEMPTS`).
 - [ ] **Underpaid** → flagged; admins receive it with `AMOUNT_MISMATCH`.
