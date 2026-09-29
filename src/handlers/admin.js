@@ -1937,6 +1937,9 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
       return true;
     }
 
+    // Fresh: deleteHall shifts rows by id, so the check must be against the
+    // sheet as it is now, not a cached copy.
+    const liveHall = (await getHalls({ fresh: true })).find(hall => hall.id === hallId);
 
     if (!liveHall || createCallbackItemToken(liveHall.name) !== token) {
       await answer('This delete button is outdated. Reopen Delete Hall list.', { show_alert: true });
