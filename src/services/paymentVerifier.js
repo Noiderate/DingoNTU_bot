@@ -11,6 +11,7 @@ const { config } = require('../config');
 const { CALLBACKS } = require('../config/constants');
 const { formatCents } = require('../utils/money');
 const { formatSgt } = require('../utils/time');
+const { shrinkForStorage } = require('../utils/receiptImage');
 const { log } = require('../utils/logger');
 
 /**
@@ -569,13 +570,27 @@ async function processSubmission(bot, submissionId, {
     if (!submission.storage_path) {
       const sha256 = crypto.createHash('sha256').update(imageBuffer).digest('hex');
 
+      // An exact repeat of an image that is already claimed is rejected here,
+      // before anything is uploaded, so repeats cost no storage. The unique
+      // violation below still covers two identical images racing each other.
+      const alreadyClaimed = await repo.findConflictingSubmission({ imageSha256: sha256 });
+
+      if (alreadyClaimed) {
+        return await handleDuplicateImage(bot, { order, submission, storagePath: null, sha256 });
+      }
+
+      // Only the stored copy is shrunk; Gemini below still reads the original.
+      const stored = await shrinkForStorage(imageBuffer);
+      const storedBuffer = stored ? stored.buffer : imageBuffer;
+      const storedMimeType = stored ? stored.mimeType : mimeType;
+
       const storagePath = repo.buildReceiptPath({
         orderCode: order.code,
         submissionId: submission.id,
-        extension: extensionFor(mimeType),
+        extension: stored ? stored.extension : extensionFor(mimeType),
       });
 
-      await repo.uploadReceipt({ path: storagePath, buffer: imageBuffer, contentType: mimeType });
+      await repo.uploadReceipt({ path: storagePath, buffer: storedBuffer, contentType: storedMimeType });
 
       try {
         submission = await repo.updatePaymentSubmission(submission.id, {

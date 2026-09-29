@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const googleSheets = require('../src/services/googleSheets');
+const menuStore = require('../src/services/menuStore');
+const { isTemporarilyUnavailable } = require('../src/utils/unavailable');
 const stateStore = require('../src/services/stateStore');
 const orderStore = require('../src/services/orderStore');
 const cartStore = require('../src/services/cartStore');
@@ -49,7 +51,14 @@ test('/start while Sheets is down asks the customer to retry instead of "No hall
   assert.doesNotMatch(sent[0], /No halls/);
 });
 
-test('confirming an order while Sheets is down keeps the cart', async t => {
+function menuDown() {
+  const error = new Error('Menu read failed: fetch failed');
+  error.code = 'MENU_UNAVAILABLE';
+  return error;
+}
+
+/** Shared setup: a customer with a phone number and a one-item cart, ready to confirm. */
+function readyToConfirm(t) {
   t.mock.method(repo, 'getCustomerByTelegramId', async () => ({ id: 'c1', phone_number: '91234567' }));
   t.mock.method(stateStore, 'withLock', async (name, task) => task());
   t.mock.method(stateStore, 'get', async (key, fallback = null) => (
@@ -59,7 +68,6 @@ test('confirming an order while Sheets is down keeps the cart', async t => {
     hallSheetRowId: 2, hallName: 'Hall A', items: { 3: { quantity: 1, name: 'Chicken Rice' } },
   }));
   t.mock.method(orderStore, 'loadBlockedHalls', async () => ({ isBlocked: () => false }));
-  t.mock.method(googleSheets, 'getFoodItemsOrThrow', async () => { throw sheetsDown(); });
   t.mock.method(cartStore, 'clearItems', async () => { throw new Error('must not clear the cart'); });
   t.mock.method(cartStore, 'clearCart', async () => { throw new Error('must not clear the cart'); });
 
@@ -69,11 +77,40 @@ test('confirming an order while Sheets is down keeps the cart', async t => {
     async sendMessage() {},
   };
 
-  await handleUserCallback(bot, {
-    id: 'q1', data: 'user_confirm_order', from: { id: 777 }, message: { chat: { id: 555 }, message_id: 9 },
-  });
+  return { answers, bot };
+}
+
+const CONFIRM_QUERY = {
+  id: 'q1', data: 'user_confirm_order', from: { id: 777 }, message: { chat: { id: 555 }, message_id: 9 },
+};
+
+test('confirming an order while the menu cannot be read keeps the cart', async t => {
+  const { answers, bot } = readyToConfirm(t);
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => { throw menuDown(); });
+
+  await handleUserCallback(bot, CONFIRM_QUERY);
 
   assert.match(answers[0], /cart is still saved/);
+});
+
+test('confirming an order while the stock deduction fails keeps the cart and creates no order', async t => {
+  const { answers, bot } = readyToConfirm(t);
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => [
+    { id: 3, name: 'Chicken Rice', price: 2.5, stock: 5 },
+  ]);
+  t.mock.method(menuStore, 'deductStock', async () => { throw menuDown(); });
+  t.mock.method(orderStore, 'createPendingOrder', async () => { throw new Error('must not create an order'); });
+
+  await handleUserCallback(bot, CONFIRM_QUERY);
+
+  assert.match(answers[0], /cart is still saved/);
+});
+
+test('an error from the halls sheet is still recognised as a temporary outage', () => {
+  assert.equal(isTemporarilyUnavailable(sheetsDown()), true);
+  assert.equal(isTemporarilyUnavailable(menuDown()), true);
+  assert.equal(isTemporarilyUnavailable(new Error('database exploded')), false);
+  assert.equal(isTemporarilyUnavailable(null), false);
 });
 
 test('a real bug is still thrown, not disguised as a Sheets outage', async t => {

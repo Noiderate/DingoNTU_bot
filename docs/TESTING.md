@@ -47,16 +47,32 @@ npm run webhook:info            # url set, pending 0, no last_error
       `delivery:preorder_post` key to re-check.)
 - [ ] **Deep link.** Tapping the channel button opens the bot and shows halls.
 - [ ] **Hall selection.** `/start` → halls listed → pick one → menu appears.
-- [ ] **Cart.** Add several items; the total updates and matches the sheet prices.
+- [ ] **Cart.** Add several items; the total updates and matches the menu prices.
 - [ ] **Clear Cart** empties it. Tapping it again says "Cart is already empty."
-- [ ] **A shifted spreadsheet row is caught.** Add an item to a cart, then
-      delete a row *above* it in `FoodAndStock` so everything below shifts up.
-      Tap Confirm Order. The customer must be told the menu changed and asked to
-      start again — they must **not** be charged for the food that moved into
-      that row. A `cart_item_mismatch` line appears in the logs.
+- [ ] **A removed item is caught.** Add an item to a cart, then delete that item
+      in the bot (Settings > Manage Food Items > Delete). Tap Confirm Order. The
+      customer must be told the menu changed and asked to start again — they
+      must **not** be charged. A `cart_item_mismatch` line appears in the logs.
 - [ ] **Confirm Order.** Customer sees an order code like `DG20260916-1`, the
       hall, the item list and the total.
-- [ ] **Stock deducted.** `FoodAndStock` column C dropped by the right amounts.
+- [ ] **Stock deducted.** The item's stock in Manage Food Items dropped by the
+      right amount, and within about a minute the `FoodAndStock` tab shows the
+      same (it is a read-only mirror).
+- [ ] **The last unit goes to one customer only.** Set an item's stock to 1, add
+      it to two different customers' carts, and tap Confirm Order on both at
+      once. Exactly one order is created; the other customer is told the item
+      "has just run out" and their cart is cleared.
+- [ ] **Rejecting an order returns stock.** Reject a paid-flagged or unpaid order
+      and check the item's stock rose by the quantity ordered.
+- [ ] **Edit Price.** Settings > Manage Food Items > **Edit Price**, tap an item,
+      and send `3.50`. The typed number and the confirmation disappear and the
+      menu shows the new price. Send `abc`, `0`, `5.999` and `5,99` first: each
+      is refused with "Invalid price" and the prompt stays. Stock is unchanged.
+      A new order is charged the new price; an order placed before the change
+      keeps its old one.
+- [ ] **A sheet edit is not honoured.** Type a different stock number into the
+      `FoodAndStock` tab. The bot's stock is unchanged, and the tab is put back
+      within a minute of the next real change.
 - [ ] **Sheet row appears immediately**, with status `awaiting_payment`.
 - [ ] **No admin approval prompt.** New orders do not send Confirm / Reject buttons.
 - [ ] **Payment instructions arrive immediately.** Customer gets the payment

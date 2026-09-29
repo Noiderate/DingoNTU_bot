@@ -5,6 +5,7 @@ const admin = require('../src/handlers/admin');
 const stateStore = require('../src/services/stateStore');
 const orderStore = require('../src/services/orderStore');
 const googleSheets = require('../src/services/googleSheets');
+const menuStore = require('../src/services/menuStore');
 const { config } = require('../src/config');
 
 /**
@@ -76,7 +77,7 @@ test('refreshPreorderPostAfterStockChange falls back to the normal silent refres
   ));
   t.mock.method(stateStore, 'set', async () => {});
   t.mock.method(googleSheets, 'getHallsOrThrow', async () => [{ id: 1, name: 'Hall A' }]);
-  t.mock.method(googleSheets, 'getFoodItemsOrThrow', async () => [{ id: 2, name: 'Iced Milo', stock: 3 }]);
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => [{ id: 2, name: 'Iced Milo', stock: 3 }]);
   t.mock.method(orderStore, 'loadBlockedHalls', async () => ({ isBlocked: () => false }));
   t.mock.method(googleSheets, 'getPreorderAdminTag', async () => null);
 
@@ -102,7 +103,7 @@ test('refreshPreorderPostAfterStockChange announces and reposts when something s
   ));
   t.mock.method(stateStore, 'set', async () => {});
   t.mock.method(googleSheets, 'getHallsOrThrow', async () => [{ id: 1, name: 'Hall A' }]);
-  t.mock.method(googleSheets, 'getFoodItemsOrThrow', async () => [{ id: 2, name: 'Iced Milo', stock: 3 }]);
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => [{ id: 2, name: 'Iced Milo', stock: 3 }]);
   t.mock.method(orderStore, 'loadBlockedHalls', async () => ({ isBlocked: () => false }));
   t.mock.method(googleSheets, 'getPreorderAdminTag', async () => null);
 
@@ -141,7 +142,7 @@ test('repostPreorderAvailability sends a fresh post then deletes the old one, an
   const stored = [];
   t.mock.method(stateStore, 'set', async (key, value) => { stored.push({ key, value }); });
   t.mock.method(googleSheets, 'getHallsOrThrow', async () => [{ id: 1, name: 'Hall A', shortName: 'A' }]);
-  t.mock.method(googleSheets, 'getFoodItemsOrThrow', async () => [{ id: 2, name: 'Iced Milo', stock: 3 }]);
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => [{ id: 2, name: 'Iced Milo', stock: 3 }]);
   t.mock.method(orderStore, 'loadBlockedHalls', async () => ({ isBlocked: () => false }));
   t.mock.method(googleSheets, 'getPreorderAdminTag', async () => null);
 
@@ -170,7 +171,7 @@ test('repostPreorderAvailability does not delete the old post if sending the new
       : fallback
   ));
   t.mock.method(googleSheets, 'getHallsOrThrow', async () => [{ id: 1, name: 'Hall A', shortName: 'A' }]);
-  t.mock.method(googleSheets, 'getFoodItemsOrThrow', async () => [{ id: 2, name: 'Iced Milo', stock: 3 }]);
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => [{ id: 2, name: 'Iced Milo', stock: 3 }]);
   t.mock.method(orderStore, 'loadBlockedHalls', async () => ({ isBlocked: () => false }));
   t.mock.method(googleSheets, 'getPreorderAdminTag', async () => null);
 
@@ -191,7 +192,7 @@ test('repostPreorderAvailability does nothing when every hall is blocked (nothin
       : fallback
   ));
   t.mock.method(googleSheets, 'getHallsOrThrow', async () => [{ id: 1, name: 'Hall A' }]);
-  t.mock.method(googleSheets, 'getFoodItemsOrThrow', async () => [{ id: 2, name: 'Iced Milo', stock: 3 }]);
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => [{ id: 2, name: 'Iced Milo', stock: 3 }]);
   t.mock.method(orderStore, 'loadBlockedHalls', async () => ({ isBlocked: () => true }));
 
   const bot = { async sendMessage() { throw new Error('should not send'); } };

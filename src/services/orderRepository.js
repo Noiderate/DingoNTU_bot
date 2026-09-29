@@ -833,6 +833,64 @@ async function uploadReceipt({ path, buffer, contentType }) {
   return path;
 }
 
+// Orders that are finished. Evidence for anything still in flight (awaiting
+// payment, being verified, flagged for review) is never eligible for cleanup.
+const RECEIPT_CLEANUP_ORDER_STATUSES = [
+  STATUS.PAID, STATUS.SERVED, STATUS.REJECTED, STATUS.CANCELLED, STATUS.EXPIRED,
+];
+
+/**
+ * Stored receipts past their retention period, for finished orders only.
+ * The submission rows themselves are kept forever (audit trail and replay
+ * guard); only the image file goes.
+ */
+async function getReceiptsPastRetention(cutoffIso, limit = 100) {
+  const supabase = getSupabase();
+
+  return unwrap(
+    await supabase
+      .from('payment_submissions')
+      .select('id, storage_path, orders!inner(status)')
+      .not('storage_path', 'is', null)
+      .lt('received_at', cutoffIso)
+      .in('orders.status', RECEIPT_CLEANUP_ORDER_STATUSES)
+      .order('received_at', { ascending: true })
+      .limit(limit),
+    'getReceiptsPastRetention'
+  );
+}
+
+/**
+ * Delete stored receipt files, then clear the paths pointing at them. The
+ * files go first: if clearing the paths fails, the next run just finds
+ * nothing left to remove for them and clears the paths then.
+ */
+async function deleteStoredReceipts(submissions) {
+  if (!submissions.length) {
+    return 0;
+  }
+
+  const supabase = getSupabase();
+
+  const removed = await supabase.storage
+    .from(config.supabase.receiptsBucket)
+    .remove(submissions.map(submission => submission.storage_path));
+
+  if (removed.error) {
+    throw new Error(`deleteStoredReceipts: ${removed.error.message}`);
+  }
+
+  unwrap(
+    await supabase
+      .from('payment_submissions')
+      .update({ storage_path: null })
+      .in('id', submissions.map(submission => submission.id)),
+    'deleteStoredReceipts.clearPaths'
+  );
+
+  return submissions.length;
+}
+
 /**
  * Short-lived signed URL for an admin resolving a dispute.
  *
@@ -889,5 +947,7 @@ module.exports = {
 
   buildReceiptPath,
   uploadReceipt,
+  getReceiptsPastRetention,
+  deleteStoredReceipts,
   createReceiptSignedUrl,
 };

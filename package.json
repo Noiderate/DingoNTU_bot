@@ -7,6 +7,7 @@
     "start": "node src/dev-polling.js",
     "dev": "nodemon src/dev-polling.js",
     "test": "node --test",
+    "menu:import": "node scripts/import-menu-from-sheet.js",
     "webhook:set": "node scripts/set-webhook.js set",
     "webhook:info": "node scripts/set-webhook.js info",
     "webhook:delete": "node scripts/set-webhook.js delete"
@@ -32,7 +33,8 @@
     "luxon": "^3.7.2",
     "node-telegram-bot-api": "^0.66.0",
     "pngjs": "^7.0.0",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"

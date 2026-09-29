@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const repo = require('../src/services/orderRepository');
-const stateStore = require('../src/services/stateStore');
+const menuStore = require('../src/services/menuStore');
 const googleSheets = require('../src/services/googleSheets');
 const orderActions = require('../src/services/orderActions');
 
@@ -29,33 +29,29 @@ const ORDER = {
   items: [{ id: 3, name: 'Chicken Rice', quantity: 2 }],
 };
 
-function mockSheets(t, liveItems) {
-  const writes = [];
-  t.mock.method(stateStore, 'withLock', async (name, task) => {
-    assert.equal(name, stateStore.LOCKS.confirmOrder());
-    return task();
-  });
-  t.mock.method(googleSheets, 'getFoodItemsOrThrow', async () => liveItems);
-  t.mock.method(googleSheets, 'updateFoodItemStocksBatch', async updates => {
-    writes.push(...updates);
+function mockMenu(t, liveItems) {
+  const restores = [];
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => liveItems);
+  t.mock.method(menuStore, 'restoreStock', async entries => {
+    restores.push(...entries);
     return { success: true };
   });
   t.mock.method(googleSheets, 'getAdminIds', () => [42]);
-  return writes;
+  return restores;
 }
 
 test('expireOrder does not touch stock when another caller already moved the order on', async t => {
-  const writes = mockSheets(t, [{ id: 3, name: 'Chicken Rice', stock: 5 }]);
+  const restores = mockMenu(t, [{ id: 3, name: 'Chicken Rice', stock: 5 }]);
   t.mock.method(repo, 'transitionOrderStatus', async () => null);
 
   const bot = { async sendMessage() { throw new Error('nobody should be messaged'); } };
 
   assert.equal(await orderActions.expireOrder(bot, ORDER), null);
-  assert.deepEqual(writes, []);
+  assert.deepEqual(restores, []);
 });
 
-test('expireOrder restocks after a successful transition, under the checkout lock', async t => {
-  const writes = mockSheets(t, [{ id: 3, name: 'Chicken Rice', stock: 5 }]);
+test('expireOrder restocks after a successful transition', async t => {
+  const restores = mockMenu(t, [{ id: 3, name: 'Chicken Rice', stock: 5 }]);
   t.mock.method(repo, 'transitionOrderStatus', async (id, from, to) => {
     assert.equal(to, STATUS.EXPIRED);
     return { ...ORDER_ROW, status: STATUS.EXPIRED };
@@ -64,11 +60,13 @@ test('expireOrder restocks after a successful transition, under the checkout loc
   const bot = { async sendMessage() {} };
 
   assert.ok(await orderActions.expireOrder(bot, ORDER));
-  assert.deepEqual(writes, [{ rowId: 3, newStock: 7 }]);
+  // The quantity to add back, not a computed new level: the database adds it
+  // atomically, so it cannot overwrite a checkout that landed in between.
+  assert.deepEqual(restores, [{ id: 3, quantity: 2 }]);
 });
 
 test('rejectOrderAndRestock does not touch stock when the transition loses the race', async t => {
-  const writes = mockSheets(t, [{ id: 3, name: 'Chicken Rice', stock: 5 }]);
+  const restores = mockMenu(t, [{ id: 3, name: 'Chicken Rice', stock: 5 }]);
   t.mock.method(repo, 'transitionOrderStatus', async () => null);
 
   const result = await orderActions.rejectOrderAndRestock({ async sendMessage() {} }, ORDER, {
@@ -76,24 +74,35 @@ test('rejectOrderAndRestock does not touch stock when the transition loses the r
   });
 
   assert.equal(result.success, false);
-  assert.deepEqual(writes, []);
+  assert.deepEqual(restores, []);
 });
 
-test('restock follows the item by name when its sheet row has shifted', async t => {
-  // Row 3 now holds a different food; Chicken Rice moved to row 4.
-  const writes = mockSheets(t, [
+test('restock follows the item by name when it was deleted and re-added under a new id', async t => {
+  // Chicken Rice was removed and added again, so it now has a different id.
+  const restores = mockMenu(t, [
     { id: 3, name: 'Milo', stock: 9 },
-    { id: 4, name: 'Chicken Rice', stock: 5 },
+    { id: 9, name: 'Chicken Rice', stock: 5 },
   ]);
 
   const result = await orderActions.restockOrder(ORDER);
 
   assert.equal(result.success, true);
-  assert.deepEqual(writes, [{ rowId: 4, newStock: 7 }]);
+  assert.deepEqual(restores, [{ id: 9, quantity: 2 }]);
+});
+
+test('restock prefers the id-and-name match over a same-named item elsewhere', async t => {
+  const restores = mockMenu(t, [
+    { id: 3, name: 'Chicken Rice', stock: 1 },
+  ]);
+
+  const result = await orderActions.restockOrder(ORDER);
+
+  assert.equal(result.success, true);
+  assert.deepEqual(restores, [{ id: 3, quantity: 2 }]);
 });
 
 test('a restock that fails after the transition alerts admins with the items to add back', async t => {
-  mockSheets(t, []); // item no longer in the sheet
+  mockMenu(t, []); // item no longer on the menu
   t.mock.method(repo, 'transitionOrderStatus', async () => ({ ...ORDER_ROW, status: STATUS.REJECTED }));
 
   const messages = [];
@@ -110,12 +119,21 @@ test('a restock that fails after the transition alerts admins with the items to 
   assert.match(alert.text, /Chicken Rice x2/);
 });
 
-test('a failed sheet read is reported as a failed restock, not thrown', async t => {
-  t.mock.method(stateStore, 'withLock', async (name, task) => task());
-  t.mock.method(googleSheets, 'getFoodItemsOrThrow', async () => { throw new Error('Sheets down'); });
+test('a failed database write is reported as a failed restock, not thrown', async t => {
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => [{ id: 3, name: 'Chicken Rice', stock: 5 }]);
+  t.mock.method(menuStore, 'restoreStock', async () => ({ success: false, message: 'database down' }));
 
   const result = await orderActions.restockOrder(ORDER);
 
   assert.equal(result.success, false);
-  assert.match(result.message, /Sheets down/);
+  assert.match(result.message, /database down/);
+});
+
+test('a failed menu read is reported as a failed restock, not thrown', async t => {
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => { throw new Error('Menu read failed'); });
+
+  const result = await orderActions.restockOrder(ORDER);
+
+  assert.equal(result.success, false);
+  assert.match(result.message, /Menu read failed/);
 });

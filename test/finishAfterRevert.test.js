@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const googleSheets = require('../src/services/googleSheets');
+const menuStore = require('../src/services/menuStore');
 const stateStore = require('../src/services/stateStore');
 const orderStore = require('../src/services/orderStore');
 const { getDeliveryModeView } = require('../src/handlers/deliveryMode');
@@ -20,7 +21,7 @@ const HALLS = [
 
 function mockView(t, { sequencer, blocked }) {
   t.mock.method(googleSheets, 'getHalls', async () => HALLS);
-  t.mock.method(googleSheets, 'getFoodItems', async () => []);
+  t.mock.method(menuStore, 'getFoodItems', async () => []);
   t.mock.method(orderStore, 'getActiveOrders', async () => []);
   t.mock.method(orderStore, 'getHallServeProgress', async () => ({ total: 0, served: 0, fraction: 1 }));
   t.mock.method(orderStore, 'loadBlockedHalls', async () => ({

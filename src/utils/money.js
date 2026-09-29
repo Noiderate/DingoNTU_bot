@@ -32,6 +32,35 @@ function toCents(value) {
 }
 
 /**
+ * Read a menu price an admin typed: "5.99", "$5.99", "6" or "1,250.50".
+ *
+ * Deliberately strict, since the result goes straight onto what customers pay:
+ * a number above zero with at most two decimals. Anything else - "abc", "0",
+ * "-3", "5.999" (which would silently round) - is null, so the admin is asked
+ * again rather than the bot guessing.
+ *
+ * A comma only counts as a thousands separator, in groups of three. Stripping
+ * commas blindly would turn a comma-as-decimal "5,99" into $599, so that is
+ * refused instead.
+ */
+function parsePriceInput(text) {
+  let cleaned = String(text === null || text === undefined ? '' : text)
+    .trim()
+    .replace(/^\$\s*/, '');
+
+  if (/^\d{1,3}(,\d{3})+(\.\d{1,2})?$/.test(cleaned)) {
+    cleaned = cleaned.replace(/,/g, '');
+  }
+
+  if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) {
+    return null;
+  }
+
+  const value = Number(cleaned);
+  return value > 0 ? value : null;
+}
+
+/**
  * Parse a monetary amount as displayed on a Singapore bank receipt.
  *
  * Handles the forms banks actually render: "S$12.50", "SGD 1,234.50", "$8",
@@ -98,6 +127,7 @@ function centsToDecimalString(cents) {
 
 module.exports = {
   toCents,
+  parsePriceInput,
   parseDisplayedAmount,
   formatCents,
   centsToDecimalString,

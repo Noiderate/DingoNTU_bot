@@ -1,5 +1,7 @@
 const googleSheets = require('../services/googleSheets');
-const { isAdmin, updateFoodItemStocksBatch, getAdminIds } = require('../services/googleSheets');
+const { isAdmin, getAdminIds } = require('../services/googleSheets');
+const menuStore = require('../services/menuStore');
+const { isTemporarilyUnavailable } = require('../utils/unavailable');
 const { CALLBACKS } = require('../config/constants');
 const { hasPreorderPost } = require('./deliveryMode');
 const { editMessageTextSafely } = require('../utils/telegramEdits');
@@ -192,7 +194,7 @@ async function showOrderScreen(bot, chatId, userId, messageId) {
     return;
   }
 
-  const foodItems = await googleSheets.getFoodItemsOrThrow();
+  const foodItems = await menuStore.getFoodItemsOrThrow();
 
   await editMessageTextSafely(bot, buildOrderText(cart.hallName, foodItems, cart), {
     chat_id: chatId,
@@ -208,16 +210,16 @@ const SHEETS_UNAVAILABLE_TEXT = "⚠️ We're having a temporary problem loading
   + 'Anything in your cart is still saved - please try again in a moment.';
 
 /**
- * A Google Sheets read failing mid-flow used to look exactly like an empty
- * sheet: no halls, no food, "the menu changed" and a cleared cart. The
- * throwing readers flag it instead, and it is turned into a retry message
- * here, with the cart left untouched.
+ * A failed read of the halls (Google Sheets) or the menu (the database) used to
+ * look exactly like an empty one: no halls, no food, "the menu changed" and a
+ * cleared cart. The throwing readers flag it instead, and it is turned into a
+ * retry message here, with the cart left untouched.
  */
 async function handleUserCommand(bot, msg) {
   try {
     return await routeUserCommand(bot, msg);
   } catch (error) {
-    if (!googleSheets.isSheetsUnavailable(error)) {
+    if (!isTemporarilyUnavailable(error)) {
       throw error;
     }
     log('warn', 'sheets_unavailable', { error: error.message });
@@ -230,7 +232,7 @@ async function handleUserCallback(bot, query) {
   try {
     return await routeUserCallback(bot, query);
   } catch (error) {
-    if (!googleSheets.isSheetsUnavailable(error)) {
+    if (!isTemporarilyUnavailable(error)) {
       throw error;
     }
     log('warn', 'sheets_unavailable', { error: error.message });
@@ -491,7 +493,7 @@ async function handleAddFood(bot, query, chatId, userId, data) {
     return true;
   }
 
-  const item = (await googleSheets.getFoodItemsOrThrow()).find(food => food.id === foodId);
+  const item = (await menuStore.getFoodItemsOrThrow()).find(food => food.id === foodId);
 
   if (!item) {
     await answerCallbackSafely(bot, query.id, 'Food item not found', { show_alert: true });
@@ -534,12 +536,34 @@ async function handleClearCart(bot, query, chatId, userId) {
 }
 
 /**
+ * The customer's cart can't be fulfilled: an item ran out (or was removed) since
+ * they added it. Their cart is cleared and they are told which item, when known.
+ */
+async function rejectCartForStock(bot, query, chatId, userId, itemName, available) {
+  await cartStore.clearItems(userId);
+  await answerCallbackSafely(bot, query.id);
+
+  const reason = itemName
+    ? `❌ Sorry, ${itemName} ${Number(available) > 0 ? `only has ${available} left` : 'has just run out'}. `
+    : '❌ An error has occurred. ';
+
+  await bot.sendMessage(
+    chatId,
+    `${reason}Your cart has been cleared. Please restart your order by typing /start.`
+  );
+}
+
+/**
  * Confirm an order: re-validate stock, deduct it, and create the order.
  *
- * Runs inside a Postgres lease lock rather than the original in-process promise
- * chain. The promise chain serialised one Node process, which stopped being
- * sufficient the moment two serverless instances could handle two customers
- * confirming the last item at the same time.
+ * Overselling is prevented by the database, not a lock: menuStore.deductStock
+ * subtracts every item in one atomic statement that only succeeds if all of them
+ * have enough left, so two customers confirming the last item at the same time
+ * cannot both get it - and nobody queues behind anybody else.
+ *
+ * The lock taken here is per customer. It only serialises one customer's own
+ * taps: a double tap on Confirm would otherwise read the same cart twice and
+ * place two orders, where serialised the second sees the cleared cart.
  */
 async function handleConfirmOrder(bot, query, chatId, userId) {
   // Checked before the lock/stock touch anything: a customer with no phone
@@ -556,7 +580,7 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
   let reservation = null;
 
   try {
-    reservation = await stateStore.withLock(stateStore.LOCKS.confirmOrder(), async () => {
+    reservation = await stateStore.withLock(stateStore.LOCKS.confirmOrder(userId), async () => {
       const cart = await cartStore.getCart(userId);
 
       if (!cart.hallName) {
@@ -589,11 +613,11 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
         return null;
       }
 
-      const liveItems = await googleSheets.getFoodItemsOrThrow();
+      const liveItems = await menuStore.getFoodItemsOrThrow();
 
-      // An item's id is its spreadsheet row number, so rows being deleted or
-      // sorted while this cart was open would silently repoint it at different
-      // food. Refuse rather than charge for something they never chose.
+      // Item ids no longer shift, but an item can still be deleted (or deleted
+      // and re-added under a new id) while this cart was open. Refuse rather
+      // than charge for something that is no longer what they chose.
       const mismatch = cartStore.findCartMismatch(entries, liveItems);
 
       if (mismatch) {
@@ -613,32 +637,22 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
         return null;
       }
 
-      const stockUpdates = [];
-      const stockChanges = [];
       const orderItems = [];
       let totalCents = 0;
 
       for (const { foodId, quantity } of entries) {
         const item = liveItems.find(food => food.id === foodId);
 
+        // A quick check against what was just read, to skip the deduction when
+        // it is already known to fail. The deduction below is the authority.
         if (!item || (item.stock || 0) < quantity) {
-          await cartStore.clearItems(userId);
-          await answerCallbackSafely(bot, query.id);
-          await bot.sendMessage(
-            chatId,
-            '❌ An error has occurred. Your cart has been cleared. Please restart your order by typing /start.'
-          );
+          await rejectCartForStock(bot, query, chatId, userId, item ? item.name : null, item ? item.stock : 0);
           return null;
         }
 
         const unitPriceCents = toCents(item.price) || 0;
         totalCents += unitPriceCents * quantity;
 
-        const oldStock = item.stock || 0;
-        const newStock = oldStock - quantity;
-
-        stockUpdates.push({ rowId: item.id, newStock });
-        stockChanges.push({ name: item.name, oldStock, newStock });
         orderItems.push({
           foodSheetRowId: item.id,
           name: item.name,
@@ -647,15 +661,20 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
         });
       }
 
-      const deducted = await updateFoodItemStocksBatch(stockUpdates);
+      // Atomic: every item is deducted, or none. A database failure throws
+      // (MENU_UNAVAILABLE) with nothing deducted, which handleUserCallback turns
+      // into "try again, your cart is still saved".
+      const deducted = await menuStore.deductStock(entries);
 
       if (!deducted.success) {
-        // The sheet write failed, so nothing was deducted - a Sheets outage,
-        // not a problem with the cart. Keep it so they can just tap again.
-        log('warn', 'stock_deduct_failed', { error: deducted.message });
-        await answerOrSend(bot, query, SHEETS_UNAVAILABLE_TEXT, { show_alert: true });
+        // Someone else took the stock between the read above and now.
+        await rejectCartForStock(bot, query, chatId, userId, deducted.name, deducted.available);
         return null;
       }
+
+      // The stock levels as they really were at deduction time, so a "sold out"
+      // announcement is only raised by the checkout that actually emptied the item.
+      const stockChanges = deducted.changes;
 
       let order;
       try {
@@ -675,12 +694,16 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
         // Stock was already deducted, so put it back rather than losing it.
         log('error', 'order_create_failed_restocking', { error: error.message });
 
-        await updateFoodItemStocksBatch(
-          stockUpdates.map((update, index) => ({
-            rowId: update.rowId,
-            newStock: update.newStock + orderItems[index].quantity,
-          }))
+        const restored = await menuStore.restoreStock(
+          entries.map(({ foodId, quantity }) => ({ id: foodId, quantity }))
         );
+
+        if (!restored.success) {
+          log('error', 'restock_failed_after_order_create_failure', {
+            error: restored.message,
+            items: orderItems.map(item => `${item.name} x${item.quantity}`),
+          });
+        }
 
         await answerCallbackSafely(bot, query.id);
         await bot.sendMessage(chatId, '❌ Could not save your order. Please try again with /start.');

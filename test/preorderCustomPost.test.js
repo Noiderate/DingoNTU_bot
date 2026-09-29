@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const googleSheets = require('../src/services/googleSheets');
+const menuStore = require('../src/services/menuStore');
 const stateStore = require('../src/services/stateStore');
 const orderStore = require('../src/services/orderStore');
 const admin = require('../src/handlers/admin');
@@ -22,7 +23,7 @@ function mockPost(t, { custom = null, post = LIVE_TEXT_POST, foodItems = [{ id: 
   });
   t.mock.method(stateStore, 'set', async (key, value) => { stored.push({ key, value }); });
   t.mock.method(googleSheets, 'getHallsOrThrow', async () => [{ id: 2, name: 'Hall Twelve', shortName: 'H12' }]);
-  t.mock.method(googleSheets, 'getFoodItemsOrThrow', async () => foodItems);
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => foodItems);
   t.mock.method(googleSheets, 'getPreorderAdminTag', async () => null);
   t.mock.method(orderStore, 'loadBlockedHalls', async () => ({ isBlocked: () => false }));
   return stored;
@@ -41,7 +42,7 @@ test('custom text replaces the intro, fills in {hall}, and is HTML-escaped', () 
 
 test('a photo caption drops food lines from the end to stay within 1024 characters', async t => {
   const foodItems = Array.from({ length: 80 }, (_, index) => ({ id: index + 2, name: `Menu item number ${index}`, stock: 1 }));
-  t.mock.method(googleSheets, 'getFoodItemsOrThrow', async () => foodItems);
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => foodItems);
 
   const text = await admin.buildPreorderMessageText('H12', null, { maxLength: 1024 });
 

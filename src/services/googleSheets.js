@@ -1,8 +1,6 @@
 const { google } = require('googleapis');
 // Load both local environment files before reading process.env directly.
 require('../config');
-const stateStore = require('./stateStore');
-const { log } = require('../utils/logger');
 
 // Initialize Google Sheets auth
 const auth = new google.auth.GoogleAuth({
@@ -333,12 +331,16 @@ async function deleteAdmin(adminIdToDelete) {
   }
 }
 
+// The menu no longer lives in the sheet - it is in the database (menuStore) and
+// the FoodAndStock tab is a one-way mirror written by menuSheetSync. The two
+// functions below survive only so scripts/import-menu-from-sheet.js can do the
+// one-time copy of an existing sheet menu into the database.
+
 /**
  * Parse FoodAndStock!A2:C rows into food items.
  *
  * The row number is computed BEFORE filtering - a blank row anywhere in the
- * middle must not shift every later item's id, or stock updates end up
- * writing to the wrong physical row (see MAINTENANCE.md).
+ * middle must not shift every later item's id.
  */
 function parseFoodItemRows(values) {
   return values
@@ -352,23 +354,7 @@ function parseFoodItemRows(values) {
     }));
 }
 
-/**
- * Read all food items from FoodAndStock sheet.
- *
- * Returns [] on a read failure, which is indistinguishable from a genuinely
- * empty menu. Anywhere "empty" would do damage (editing the public post to
- * "no food available", clearing a customer's cart as "the menu changed")
- * must use getFoodItemsOrThrow instead.
- */
-async function getFoodItems() {
-  try {
-    return await getFoodItemsOrThrow();
-  } catch (error) {
-    console.error('Error reading food items:', error.message);
-    return [];
-  }
-}
-
+/** Read the FoodAndStock tab. Throws (SHEETS_UNAVAILABLE) on a read failure. */
 async function getFoodItemsOrThrow() {
   const values = await readSheetValues('FoodAndStock!A2:C'); // Start from A2 (skip header)
   return parseFoodItemRows(values);
@@ -398,168 +384,8 @@ function isSheetsUnavailable(error) {
 }
 
 /**
- * Add a new food item to FoodAndStock sheet
- */
-async function addFoodItem(name, price) {
-  try {
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-    const range = 'FoodAndStock!A2:B';
-
-    const resource = {
-      values: [[name, price]],
-    };
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range,
-      valueInputOption: 'RAW',
-      resource,
-    });
-
-    console.log(`✓ Food item added: ${name}`);
-    return { success: true, message: `✓ Food item "${name}" ($${price}) added successfully.` };
-  } catch (error) {
-    console.error('Error adding food item:', error.message);
-    return { success: false, message: `✗ Failed to add food item: ${error.message}` };
-  }
-}
-
-/**
- * Delete a food item from FoodAndStock sheet
- */
-async function deleteFoodItem(rowId) {
-  try {
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-
-    // Read all food items
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: 'FoodAndStock!A2:C',
-    });
-
-    let foodItems = response.data.values || [];
-    
-    // Calculate the index in the array (rowId is the actual sheet row number)
-    const itemIndex = rowId - 2; // Convert row number to array index
-    
-    // Remove the item at the specified index
-    if (itemIndex >= 0 && itemIndex < foodItems.length) {
-      foodItems.splice(itemIndex, 1);
-    } else {
-      throw new Error(`Food item at row ${rowId} not found`);
-    }
-
-    // Clear the entire range
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId,
-      range: 'FoodAndStock!A2:C',
-    });
-
-    // Rewrite the remaining items
-    if (foodItems.length > 0) {
-      const resource = {
-        values: foodItems,
-      };
-
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: 'FoodAndStock!A2',
-        valueInputOption: 'RAW',
-        resource,
-      });
-    }
-
-    console.log(`✓ Food item deleted: Row ${rowId}`);
-    return { success: true, message: `✓ Food item deleted successfully.` };
-  } catch (error) {
-    console.error('Error deleting food item:', error.message);
-    return { success: false, message: `✗ Failed to delete food item: ${error.message}` };
-  }
-}
-
-/**
- * Update stock for a specific food item
- */
-async function updateFoodItemStock(rowId, newStock) {
-  try {
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-    
-    // Get the food item name to display confirmation
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `FoodAndStock!A${rowId}:A${rowId}`,
-    });
-    
-    const values = response.data.values || [];
-    const itemName = values[0] ? values[0][0] : 'Unknown';
-    
-    // Update the stock (column C)
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `FoodAndStock!C${rowId}`,
-      valueInputOption: 'RAW',
-      resource: {
-        values: [[newStock]],
-      },
-    });
-
-    console.log(`✓ Stock updated for ${itemName}: ${newStock}`);
-
-    // Only a manual admin edit reaches this function - order-driven
-    // deduct/restock goes through updateFoodItemStocksBatch instead - so this
-    // is the one place that should move the "what Reset Halls and Orders
-    // restores to" baseline.
-    try {
-      await stateStore.update(stateStore.KEYS.stockBaselines(), current => ({
-        ...(current || {}),
-        [itemName]: newStock,
-      }));
-    } catch (error) {
-      log('warn', 'stock_baseline_update_failed', { item: itemName, error: error.message });
-    }
-
-    return { success: true, message: `✓ Stock updated for "${itemName}" to ${newStock}.` };
-  } catch (error) {
-    console.error('Error updating food stock:', error.message);
-    return { success: false, message: `✗ Failed to update stock: ${error.message}` };
-  }
-}
-
-/**
- * Update stock for multiple food items in one batch request
- */
-async function updateFoodItemStocksBatch(stockUpdates) {
-  try {
-    if (!Array.isArray(stockUpdates) || stockUpdates.length === 0) {
-      return { success: true };
-    }
-
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-
-    const data = stockUpdates.map(update => ({
-      range: `FoodAndStock!C${update.rowId}`,
-      values: [[update.newStock]],
-    }));
-
-    await sheets.spreadsheets.values.batchUpdate({
-      spreadsheetId,
-      resource: {
-        valueInputOption: 'RAW',
-        data,
-      },
-    });
-
-    console.log(`✓ Batch stock updated for ${stockUpdates.length} item(s)`);
-    return { success: true };
-  } catch (error) {
-    console.error('Error updating food stocks in batch:', error.message);
-    return { success: false, message: `✗ Failed to update food stocks: ${error.message}` };
-  }
-}
-
-/**
- * Parse Hall!A2:B rows into halls. Row number computed before filtering -
- * see parseFoodItemRows() above for why.
+ * Parse Hall!A2:B rows into halls. The row number is computed before filtering,
+ * so a blank row in the middle does not shift every later hall's id.
  */
 function parseHallRows(values) {
   return values
@@ -573,8 +399,9 @@ function parseHallRows(values) {
 }
 
 /**
- * Read all halls from Hall sheet. Returns [] on a read failure - see
- * getFoodItems for when to use getHallsOrThrow instead.
+ * Read all halls from Hall sheet. Returns [] on a read failure, which is
+ * indistinguishable from a genuinely empty list - anywhere "empty" would do
+ * damage (telling a customer there are no halls) must use getHallsOrThrow.
  */
 async function getHalls(options) {
   try {
@@ -757,14 +584,9 @@ module.exports = {
   readFromSheetOrThrow,
   addAdmin,
   deleteAdmin,
-  getFoodItems,
   getFoodItemsOrThrow,
   isSheetsUnavailable,
   parseFoodItemRows,
-  addFoodItem,
-  deleteFoodItem,
-  updateFoodItemStock,
-  updateFoodItemStocksBatch,
   getHalls,
   getHallsOrThrow,
   invalidateHallsCache,

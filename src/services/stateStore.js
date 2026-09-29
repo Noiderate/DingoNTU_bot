@@ -51,12 +51,11 @@ const KEYS = {
   preorderCustom: () => 'settings:preorder_custom',
   // Highest message id seen per chat, for admin-menu positioning.
   latestChatMessage: chatId => `chat:latest_msg:${chatId}`,
-  // Each food item's last admin-set stock level, keyed by item name (not row
-  // id - rows shift when the sheet is edited directly, see MAINTENANCE.md
-  // "Row-number-as-ID"). Updated only by a manual stock edit, never by an
-  // order's deduct/restock, so "Reset Halls and Orders" can put stock back to
-  // what the admin actually configured rather than wherever the night left it.
-  stockBaselines: () => 'stock:baselines',
+  // What was last written to the FoodAndStock sheet mirror, { hash, rowCount },
+  // so an unchanged menu costs no Sheets write (see menuSheetSync).
+  menuSheetSync: () => 'menu:sheet_sync',
+  // Running tally of "sold out" moments for the Stats tab: { total, items: { name: count } }.
+  soldOutStats: () => 'stats:sold_out',
   // Cached t.me deep link and payment-image file_id, to avoid repeat API calls.
   botStartUrl: () => 'cache:bot_start_url',
   paymentImageFileId: () => 'cache:payment_image_file_id',
@@ -256,8 +255,11 @@ async function withLock(name, task, {
 }
 
 const LOCKS = {
-  // Guards stock re-validation + sheet deduction + order creation.
-  confirmOrder: () => 'order:confirm',
+  // Serialises ONE customer's Confirm taps, so a double tap cannot read the same
+  // cart twice and place two orders. Per customer on purpose: stock itself is
+  // protected by an atomic database statement (menuStore.deductStock), so
+  // different customers never wait on each other.
+  confirmOrder: userId => `order:confirm:${userId}`,
   // Guards admin Confirm/Reject and payment Accept/Reject for one order, so two
   // admins tapping at once cannot both act.
   orderAction: orderId => `order:action:${orderId}`,
@@ -270,6 +272,8 @@ const LOCKS = {
   deliveryReset: () => 'delivery:reset',
   // Rate-limits how often the Today's Orders tab is rewritten (see todaySheet).
   todaySheetRefresh: () => 'todaysheet:refresh',
+  // Rate-limits how often the FoodAndStock mirror is rewritten (see menuSheetSync).
+  menuSheetSync: () => 'menusheet:sync',
 };
 
 module.exports = {

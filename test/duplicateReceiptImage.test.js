@@ -120,7 +120,14 @@ test('a repeat screenshot resolves as a duplicate, not a Gemini verification fai
     }
     return { id, ...patch };
   });
-  t.mock.method(repo, 'findConflictingSubmission', async () => ({ id: 'winning-submission' }));
+  // The up-front check finds nothing (two identical images racing), so the
+  // upload happens and the unique index is what catches it; only the later
+  // lookup inside handleDuplicateImage finds the winner.
+  let lookups = 0;
+  t.mock.method(repo, 'findConflictingSubmission', async () => {
+    lookups += 1;
+    return lookups === 1 ? null : { id: 'winning-submission' };
+  });
   t.mock.method(repo, 'transitionOrderStatus', async () => ({ id: 'order-1', status: STATUS.AWAITING_PAYMENT }));
 
   const notified = [];
@@ -135,4 +142,35 @@ test('a repeat screenshot resolves as a duplicate, not a Gemini verification fai
   assert.equal(notified.length, 1);
   assert.equal(notified[0].text, MESSAGES.DUPLICATE);
   assert.notEqual(notified[0].text, MESSAGES.FLAGGED); // the old, wrong outcome
+});
+
+test('a repeat screenshot already on file is rejected before anything is uploaded', async t => {
+  const orderRow = {
+    id: 'order-1', order_code: 'DG1', status: STATUS.VERIFYING_PAYMENT, telegram_chat_id: 555,
+    total_cents: 500, order_items: [], customers: {},
+  };
+  const submission = {
+    id: 'sub-3', order_id: 'order-1', storage_path: null, received_at: new Date().toISOString(),
+    attempt_count: 0, processing_message_id: 42,
+  };
+
+  t.mock.method(repo, 'getPaymentSubmission', async () => submission);
+  t.mock.method(repo, 'claimSubmissionById', async () => submission);
+  t.mock.method(repo, 'getOrderById', async () => orderRow);
+  t.mock.method(repo, 'buildReceiptPath', () => 'x.jpg');
+  t.mock.method(repo, 'uploadReceipt', async () => { throw new Error('must not upload a duplicate'); });
+  t.mock.method(repo, 'findConflictingSubmission', async () => ({ id: 'winning-submission' }));
+
+  const patches = [];
+  t.mock.method(repo, 'updatePaymentSubmission', async (id, patch) => { patches.push(patch); return { id, ...patch }; });
+  t.mock.method(repo, 'transitionOrderStatus', async () => ({ id: 'order-1', status: STATUS.AWAITING_PAYMENT }));
+  t.mock.method(orderActions, 'notify', async () => true);
+
+  const bot = { async getFileLink() { return 'https://example.com/file.jpg'; } };
+  t.mock.method(globalThis, 'fetch', async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }));
+
+  const result = await processSubmission(bot, 'sub-3', { alreadyClaimed: true });
+
+  assert.equal(result.outcome, 'duplicate_rejected');
+  assert.equal(patches.at(-1).storage_path, null);
 });

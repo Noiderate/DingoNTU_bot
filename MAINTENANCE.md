@@ -58,13 +58,24 @@ the receipts automatically, and coordinates a delivery round across dorm halls.
 | Carts | **Supabase** | `carts` |
 | Hall blocking | **Supabase** | `halls_state` |
 | Delivery sequencer, admin prompts, menu positions, caches | **Supabase** | `bot_state` |
+| Food, prices, stock | **Supabase** | `menu_items` (edited in the bot: Settings > Manage Food Items - add, delete, edit stock, edit price) |
 | Admin IDs, tagged admin | **Google Sheets** | `Settings` (IDs col A, tagged admin B2) |
-| Food, prices, stock | **Google Sheets** | `FoodAndStock` (A name, B price, C stock) |
 | Halls | **Google Sheets** | `Hall` (A name, B short name) |
+| Food tab | **mirror only** — never edit | `FoodAndStock` (A name, B price, C stock) |
 | Orders tab | **mirror only** — never edit | `Orders` |
+| Today's Orders tab | **mirror only** — never edit | `Today's Orders` |
 
-> The `Orders` tab is written *by* the bot. Editing it by hand is safe for
-> reading, but your edits get overwritten on the order's next change.
+> The `Orders`, `Today's Orders` and `FoodAndStock` tabs are written *by* the
+> bot. Editing them by hand is safe for reading, but your edits get overwritten
+> on the next change - for `FoodAndStock`, that means **a stock number typed in
+> the sheet does nothing to the bot, and is overwritten the next time the menu
+> changes** (the mirror compares the database with what it last wrote, not with
+> the sheet's contents, so an untouched menu leaves a hand edit sitting there).
+> Change food, prices and stock through the bot.
+>
+> The food tab is copied from Supabase by `src/services/menuSheetSync.js`, once
+> a minute and only when something changed, so it can lag a stock change by up to
+> a minute. It never blanks the tab: while `menu_items` is empty it does nothing.
 
 ### How an update flows
 
@@ -101,6 +112,13 @@ npm run webhook:info     # what is registered right now
 npm run webhook:set      # point Telegram at PUBLIC_BASE_URL
 npm run webhook:delete   # back to local polling
 ```
+
+### Importing the menu (once, after migration 0007)
+
+Migration `0007_menu_items.sql` creates `menu_items` empty. Copy the existing
+`FoodAndStock` tab into it once, before the first deploy, with
+`npm run menu:import` (see README, "Import the menu"). The mirror does nothing
+while `menu_items` is empty, so an un-imported sheet is never blanked.
 
 ### Applying migrations
 
@@ -331,42 +349,40 @@ Delete the row to force the next tap to re-query Supabase directly:
 delete from bot_state where key = 'delivery:serve_cache:<hall name>';
 ```
 
-### 3.3 Row-number-as-ID in `FoodAndStock` and `Hall`
+### 3.3 Row-number-as-ID in `Hall`
 
-**This is the most fragile thing in the system.** An item's ID *is* its
-spreadsheet row number. Nothing else identifies it.
+**Food no longer has this problem.** Menu items are rows in `menu_items` with a
+real, permanent `id`, so adding or deleting an item never renumbers another. It
+still applies to **halls**, which live in the `Hall` tab: a hall's ID *is* its
+spreadsheet row number, and nothing else identifies it.
 
-Deleting, inserting or sorting rows renumbers everything below, so:
+Deleting, inserting or sorting hall rows renumbers everything below, so:
 
-- open carts point at the wrong item
-- delete buttons in an open admin menu target the wrong row
-- `food_sheet_row_id` / `hall_sheet_row_id` in Supabase stop matching the sheet
+- open hall buttons can point at the wrong hall
+- `hall_sheet_row_id` in Supabase stops matching the sheet
 
-Partial mitigations already in place:
+Mitigations in place:
 
-- **Carts record the item name when it is added**, and `findCartMismatch` in
-  `src/services/cartStore.js` re-checks it at checkout. If a row shifted, the
-  customer is told the menu changed and asked to start again, rather than being
-  charged for whatever food moved into that row. This closes the one failure
-  mode that actually costs a customer money.
-- **Delete buttons carry a hash of the item name**
-  (`createCallbackItemToken` in `src/handlers/admin.js`) and refuse to fire if
-  the name at that row no longer matches.
-- **Orders snapshot the item name and price**, so past orders always read
-  correctly however the sheet changes afterwards.
-- **Restocking matches on row id and falls back to name**
-  (`restockOrder` in `src/services/orderActions.js`).
+- **Hall buttons carry a hash of the hall name**
+  (`createCallbackItemToken`) and refuse to fire if the name at that row no
+  longer matches.
+- **Orders snapshot the hall name**, so past orders read correctly however the
+  sheet changes afterwards.
+- **The hall list is cached for 10 minutes** per instance
+  (`getHallsOrThrow` in `src/services/googleSheets.js`). It is re-read fresh
+  when the preorder is posted and on the Manage Halls screens, so a change made
+  directly in the sheet shows up by the next preorder at the latest.
 
-None of these fix the underlying design — they contain its consequences. A
-mismatch is logged as `cart_item_mismatch`; seeing those in the logs means
-someone is editing the sheet during a live run.
+The same applies to a cart item: carts record the item name when it is added,
+and `findCartMismatch` in `src/services/cartStore.js` re-checks it at checkout,
+so an item deleted (or renamed) while someone was ordering is refused rather
+than charged. A mismatch is logged as `cart_item_mismatch`.
 
-**Rules for staff:**
+**Rules for staff (halls):**
 
-1. Never delete or reorder rows during an active preorder run.
-2. To retire an item, set its stock to `0` rather than deleting the row.
-3. Add new items at the **bottom**.
-4. Never sort the sheet.
+1. Never delete or reorder hall rows during an active preorder run.
+2. Add new halls at the **bottom**.
+3. Never sort the sheet.
 
 ### 3.4 Supabase
 
@@ -381,8 +397,10 @@ which keeps it active. If you ever remove that job, add a keep-alive.
 
 Other things to watch:
 
-- **Limits:** 500 MB database, 1 GB storage. Receipts dominate storage; check
-  with `select pg_size_pretty(pg_database_size(current_database()));`
+- **Limits:** 500 MB database, 1 GB storage. Receipts dominate storage (old
+  ones are deleted automatically, see "PDPA and retention"); check with
+  `select pg_size_pretty(pg_database_size(current_database()));` and
+  `select count(*), pg_size_pretty(sum((metadata->>'size')::bigint)) from storage.objects where bucket_id = 'payment-receipts';`
 - **Backups:** the free tier's backups are limited. Take your own:
   `supabase db dump -f backup.sql`
 - **Key rotation:** rotate the service-role key in the dashboard, update
@@ -547,25 +565,31 @@ staying stranded above.
 
 ### 3.14 Concurrency and overselling
 
-Stock deduction runs inside a Postgres lease lock (`order:confirm`, see
-`withLock` in `src/services/stateStore.js`). Two customers confirming the last
-item from different instances serialise correctly.
+**Stock is protected by the database, not a lock.** Checkout deducts through
+`deduct_menu_stock` (`supabase/migrations/0007_menu_items.sql`), one atomic
+statement that locks the rows, checks that *every* item has enough, and only then
+deducts - so two customers confirming the last item cannot both get it, a cart
+with one short item deducts nothing at all, and nobody queues behind anybody
+else. Stock also cannot go below zero: `menu_items.stock` has a `check (stock >=
+0)`. Restocking (`restore_menu_stock`) and the "Reset Halls and Orders" baseline
+restore (`restore_menu_baselines`) are single statements too.
 
-**Direct spreadsheet edits bypass this entirely.** Google Sheets has no
-transactions, so an admin typing a new stock number while an order is confirming
-can overwrite the deduction.
+The one lock left in checkout is **per customer** (`order:confirm:<telegram id>`,
+see `LOCKS.confirmOrder` in `src/services/stateStore.js`). It only stops one
+customer's double tap on Confirm from reading the same cart twice and placing two
+orders.
 
-*Spotting an oversell:* the sheet shows stock `0` or negative while orders exist
-that were never restocked.
+*Spotting an oversell:* it cannot happen through the bot. If stock looks wrong,
+compare against the orders that consumed it:
 
 ```sql
 select order_code, status, hall_name_snapshot, total_cents, created_at
 from orders where created_at > now() - interval '1 day' order by created_at;
 ```
 
-*Fix:* count what was genuinely sold and correct the sheet by hand.
-*Prevention:* edit stock through the admin menu, not the spreadsheet, during a
-run.
+*Fix:* set the right number in the bot (Settings > Manage Food Items > Edit
+Stock). Note that a manual edit also moves that item's reset baseline
+(`menu_items.baseline_stock`).
 
 **Payment verification also runs under a lease**, on `payment_submissions.locked_until`/`locked_by`. Both entry points must claim a submission before touching it: the scheduled worker via `claimNextSubmission()`, and the synchronous in-request path (triggered by the customer's screenshot, run via `waitUntil`) via `claimSubmissionById()` inside `processSubmission()` itself. A freshly-submitted receipt is immediately claimable (queued, unlocked, due now by default), so without the synchronous path also claiming it, a scheduled tick landing in that same window could run a second, fully independent verification pass on it concurrently - each hitting Gemini separately and potentially disagreeing on the outcome (one flagging to admins, the other auto-approving). If you ever add a third way to reach `processSubmission()`, it must claim first too (pass `alreadyClaimed: true` only if the caller already holds the lease).
 
@@ -841,10 +865,18 @@ order history.
 
 **PDPA and retention.** Receipts contain names, bank details and phone numbers.
 Suggested policy: keep payment evidence 12 months for disputes and accounting,
-then delete. **Deletion is not implemented** — `payment_submissions` has a
-trigger blocking `DELETE` precisely so nobody removes evidence casually. Decide
-the policy, then write a deliberate job that archives and drops the storage
-objects.
+then delete. The bot currently deletes receipt **images** 30 days after upload
+(`RECEIPT_RETENTION_DAYS`, `0` keeps them forever) to stay inside the free
+1 GB storage limit. This runs in the minute-by-minute sweep and only touches
+orders that are finished (paid, served, rejected, cancelled, expired) — never a
+receipt still awaiting payment, being verified or flagged for review. The
+`payment_submissions` rows are never deleted (a trigger blocks `DELETE`): the
+extracted details, outcome and `image_sha256` stay, so the replay guard keeps
+working; only the image file goes and `storage_path` is set to null. Stored
+copies are also shrunk to a max of 2000px JPEG (Gemini still reads the
+original), and an exact repeat of an image already on file is rejected before
+it is uploaded. If you need the full 12 months, raise `RECEIPT_RETENTION_DAYS`
+and watch storage usage.
 
 > **The Gemini free tier trains on submitted content.** Receipts are personal
 > data. This is acceptable for a portfolio demo with internal test payments; it
@@ -856,29 +888,24 @@ objects.
 
 An honest list.
 
-1. **Config still lives in Google Sheets.** Admins, food, stock and halls are
-   read from the sheet on every relevant request. It has no transactions, so
-   concurrent edits can silently overwrite each other.
-   *Improvement:* move stock into Postgres and mirror it out, inverting the
-   current direction.
+1. **Halls and admin settings still live in Google Sheets.** Food and stock
+   moved to Postgres (so checkout no longer touches Sheets or its 60-a-minute
+   quota), but halls and the admin list are still read from the sheet. Halls are
+   cached, so this costs little; it has no transactions, so concurrent edits can
+   overwrite each other.
+   *Improvement:* move halls and admins into Postgres too, the same way.
 
-2. **Row numbers are item IDs.** §3.3. Still the most likely cause of a
-   confusing production bug. Carts now detect a shifted row at checkout and
-   refuse, so nobody is charged for the wrong food, but open admin menus and the
-   `food_sheet_row_id` snapshots stored on orders can still point at the wrong
-   row.
-   *Improvement:* add a stable ID column to `FoodAndStock` and `Hall` and key on
-   that instead. Worth doing once the system is proven working end to end — not
-   before, since it touches the menu, carts, admin buttons and the schema at
-   once.
+2. **Hall row numbers are hall IDs.** §3.3. Hall buttons carry a name hash and
+   refuse a stale tap, but `hall_sheet_row_id` snapshots stored on orders can
+   still point at the wrong row after a sheet edit.
+   *Improvement:* give halls a real id, as `menu_items` has.
 
-3. **Sheets stock has no transactional guarantee.** The lease lock serialises
-   the bot's own writes, but a human editing the sheet bypasses it entirely.
-   *Improvement:* same as (1).
+3. **The `FoodAndStock` tab is a delayed, one-way mirror.** It lags a stock
+   change by up to a minute, and anything typed into it is overwritten.
 
 4. **The preorder post refreshes on events plus once a minute**, not every 5
-   seconds. Spreadsheet edits take up to a minute to appear. Bot-driven changes
-   are instant.
+   seconds. Hall edits made directly in the spreadsheet take up to a minute to
+   appear. Bot-driven changes, including all stock changes, are instant.
    *Improvement:* acceptable as-is; shorten the cron interval if it matters.
 
 5. **One bot token for development and production.** Local development takes

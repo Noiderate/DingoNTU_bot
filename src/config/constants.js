@@ -24,6 +24,8 @@ const CALLBACKS = {
   FOOD_EDIT_STOCK: 'food_edit_stock',
   FOOD_EDIT_STOCK_PREFIX: 'food_edit_stock_',
   FOOD_EDIT_ALL_STOCK: 'food_edit_all_stock',
+  FOOD_EDIT_PRICE: 'food_edit_price',
+  FOOD_EDIT_PRICE_PREFIX: 'food_edit_price_',
 
   // Dingo channel preorder post: custom first line and optional photo
   SETTINGS_PREORDER_POST: 'settings_preorder_post',
@@ -78,6 +80,7 @@ const STATES = {
   ADD_ADMIN: 'add_admin',
   EDIT_FOOD_STOCK_SPECIFIC: 'edit_food_stock_specific',
   EDIT_ALL_FOOD_STOCK_LOOP: 'edit_all_food_stock_loop',
+  EDIT_FOOD_PRICE: 'edit_food_price',
   ADD_HALL: 'add_hall',
   EDIT_PREORDER_TEXT: 'edit_preorder_text',
   ATTACH_PREORDER_PHOTO: 'attach_preorder_photo',

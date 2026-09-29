@@ -115,6 +115,7 @@ function manageFoodItemsKeyboard() {
       [{ text: '➖ Delete Food Item', callback_data: CALLBACKS.FOOD_DELETE }],
       [{ text: '📊 Edit Specific Stock', callback_data: CALLBACKS.FOOD_EDIT_STOCK }],
       [{ text: '📊 Edit All Stock', callback_data: CALLBACKS.FOOD_EDIT_ALL_STOCK }],
+      [{ text: '💲 Edit Price', callback_data: CALLBACKS.FOOD_EDIT_PRICE }],
       [{ text: '← Back', callback_data: CALLBACKS.ADMIN_SETTINGS }],
     ],
   };
@@ -140,6 +141,20 @@ function foodItemsDeleteKeyboard(foodItems) {
 function foodItemsEditStockKeyboard(foodItems) {
   const buttons = foodItems.map(item => [
     { text: `${item.name} (Stock: ${item.stock || 0})`, callback_data: `${CALLBACKS.FOOD_EDIT_STOCK_PREFIX}${item.id}` }
+  ]);
+  buttons.push([{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }]);
+  return { inline_keyboard: buttons };
+}
+
+/**
+ * Food items with price edit buttons
+ */
+function foodItemsEditPriceKeyboard(foodItems) {
+  const buttons = foodItems.map(item => [
+    {
+      text: `${item.name} ($${Number(item.price).toFixed(2)})`,
+      callback_data: `${CALLBACKS.FOOD_EDIT_PRICE_PREFIX}${item.id}`,
+    },
   ]);
   buttons.push([{ text: '← Back', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }]);
   return { inline_keyboard: buttons };
@@ -334,6 +349,7 @@ module.exports = {
   manageFoodItemsKeyboard,
   foodItemsDeleteKeyboard,
   foodItemsEditStockKeyboard,
+  foodItemsEditPriceKeyboard,
   addFoodItemKeyboard,
   cancelStockEditKeyboard,
   manageHallsKeyboard,

@@ -100,6 +100,21 @@ function editSpecificStockText() {
 }
 
 /**
+ * Edit price selection text
+ */
+function editPriceListText() {
+  return `💲 Edit Price\n\nClick on a food item to change its price:`;
+}
+
+/**
+ * Edit price prompt text
+ */
+function editPricePromptText(itemName, currentPrice) {
+  return `💲 Enter the new price for: ${itemName}\n(Current price: $${Number(currentPrice).toFixed(2)})\n\n`
+    + `Reply with a number, e.g. 5.99`;
+}
+
+/**
  * Edit specific stock prompt text
  */
 function editStockPromptText(itemName, currentStock, currentIndex, totalItems) {
@@ -338,6 +353,8 @@ module.exports = {
   noFoodItemsText,
   addFoodItemPromptText,
   editSpecificStockText,
+  editPriceListText,
+  editPricePromptText,
   editStockPromptText,
   editAllStockStartText,
   updateCompleteText,

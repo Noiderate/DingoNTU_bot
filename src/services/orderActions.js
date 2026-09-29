@@ -1,5 +1,5 @@
 const googleSheets = require('./googleSheets');
-const stateStore = require('./stateStore');
+const menuStore = require('./menuStore');
 const repo = require('./orderRepository');
 const orderStore = require('./orderStore');
 const { formatCents } = require('../utils/money');
@@ -17,16 +17,15 @@ const { log } = require('../utils/logger');
 const STATUS = repo.STATUS;
 
 /**
- * Return an order's items to the FoodAndStock sheet.
+ * Return an order's items to the menu's stock.
  *
- * Matches on the sheet row id AND name first, falling back to the name alone,
- * because row ids shift whenever staff insert, delete or sort rows in the
- * sheet - see MAINTENANCE.md "Row-number-as-ID". A bare id match could add the
- * stock to whichever food has since moved into that row.
+ * Matches on the menu item id AND name first, falling back to the name alone:
+ * an item deleted and re-added under the same name has a new id, and its stock
+ * should still go back to it. A bare id match could otherwise add stock to a
+ * different food.
  *
- * Runs under the same lock as checkout: both read the sheet's stock and write
- * back a computed value, so interleaving them would silently lose one side's
- * change (a lost restock, or a lost deduction and an oversell).
+ * The add itself is one atomic database statement (menuStore.restoreStock), so it
+ * needs no lock and cannot lose a concurrent checkout's deduction.
  *
  * Never throws; returns { success: false, message } instead.
  */
@@ -36,33 +35,28 @@ async function restockOrder(order) {
   }
 
   try {
-    return await stateStore.withLock(stateStore.LOCKS.confirmOrder(), async () => {
-      const liveItems = await googleSheets.getFoodItemsOrThrow();
-      const updates = [];
+    const liveItems = await menuStore.getFoodItemsOrThrow();
+    const updates = [];
 
-      for (const orderedItem of order.items) {
-        const liveItem = liveItems.find(item => item.id === orderedItem.id && item.name === orderedItem.name)
-          || liveItems.find(item => item.name === orderedItem.name);
+    for (const orderedItem of order.items) {
+      const liveItem = liveItems.find(item => item.id === orderedItem.id && item.name === orderedItem.name)
+        || liveItems.find(item => item.name === orderedItem.name);
 
-        if (!liveItem) {
-          return {
-            success: false,
-            message: `Cannot restore stock for ${orderedItem.name} - it is no longer in the sheet`,
-          };
-        }
-
-        updates.push({
-          rowId: liveItem.id,
-          newStock: (liveItem.stock || 0) + orderedItem.quantity,
-        });
+      if (!liveItem) {
+        return {
+          success: false,
+          message: `Cannot restore stock for ${orderedItem.name} - it is no longer on the menu`,
+        };
       }
 
-      const result = await googleSheets.updateFoodItemStocksBatch(updates);
+      updates.push({ id: liveItem.id, quantity: orderedItem.quantity });
+    }
 
-      return result.success
-        ? { success: true, restocked: updates.length }
-        : { success: false, message: result.message };
-    });
+    const result = await menuStore.restoreStock(updates);
+
+    return result.success
+      ? { success: true, restocked: updates.length }
+      : { success: false, message: result.message };
   } catch (error) {
     return { success: false, message: error.message };
   }
@@ -78,7 +72,7 @@ async function alertRestockFailed(bot, order, message) {
 
   const items = (order.items || []).map(item => `• ${item.name} x${item.quantity}`).join('\n');
   const text = `⚠️ Could not return stock for Order ${order.code} (${message}).\n\n`
-    + `Please add these back in the FoodAndStock sheet by hand:\n${items}`;
+    + `Please add these back by hand (Settings > Manage Food Items):\n${items}`;
 
   for (const adminId of googleSheets.getAdminIds()) {
     await notify(bot, adminId, text);

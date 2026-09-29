@@ -81,6 +81,9 @@ const config = {
     url: readString('SUPABASE_URL'),
     serviceRoleKey: readString('SUPABASE_SERVICE_ROLE_KEY'),
     receiptsBucket: readString('SUPABASE_RECEIPTS_BUCKET', 'payment-receipts'),
+    // Stored receipt images of finished orders are deleted after this many
+    // days to stay inside the free storage limit. 0 keeps them forever.
+    receiptRetentionDays: readInt('RECEIPT_RETENTION_DAYS', 30),
   },
 
   gemini: {

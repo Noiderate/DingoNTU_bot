@@ -4,6 +4,7 @@ const { getSupabase, unwrap } = require('./supabase');
 const { processQueue } = require('./paymentVerifier');
 const { drainOutbox, reconcile } = require('./sheetMirror');
 const { refreshTodaySheet } = require('./todaySheet');
+const { syncMenuToSheet } = require('./menuSheetSync');
 const { refreshPreorderPost, refreshHallServeOrdersMessage, refreshDeliveryModeMenus } = require('../handlers/admin');
 const { ensureAdminIdsLoaded } = require('./googleSheets');
 const repo = require('./orderRepository');
@@ -74,15 +75,50 @@ async function runRefreshTodaySheet() {
 }
 
 /**
+ * Copy the menu into the FoodAndStock tab if it changed.
+ *
+ * The tab is a one-way, read-only mirror of the database, so this is what keeps
+ * it current after a stock change; it is free while nothing changed (see
+ * menuSheetSync).
+ */
+async function runSyncMenuSheet() {
+  return syncMenuToSheet();
+}
+
+/**
  * Re-render the preorder channel post.
  *
- * Catches stock and hall edits made straight into the spreadsheet, which the
- * bot's event-driven refresh never sees. Skips the Telegram call entirely when
- * the rendered content is unchanged, so this is usually free.
+ * Catches hall edits made straight into the spreadsheet, which the bot's
+ * event-driven refresh never sees. Skips the Telegram call entirely when the
+ * rendered content is unchanged, so this is usually free.
  */
 async function runRefreshPreorder() {
   const bot = getBot();
   return refreshPreorderPost(bot);
+}
+
+/**
+ * Delete receipt images past RECEIPT_RETENTION_DAYS, for finished orders only.
+ *
+ * A small batch per run keeps each tick cheap; a backlog clears over the next
+ * few minutes. When nothing is due this is a single small query.
+ */
+async function deleteOldReceipts() {
+  const days = config.supabase.receiptRetentionDays;
+
+  if (!days || days <= 0) {
+    return 0;
+  }
+
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const due = await repo.getReceiptsPastRetention(cutoff, 100);
+  const deleted = await repo.deleteStoredReceipts(due);
+
+  if (deleted > 0) {
+    log('info', 'receipts_deleted', { count: deleted, older_than_days: days });
+  }
+
+  return deleted;
 }
 
 /**
@@ -133,6 +169,14 @@ async function runSweep() {
     'sweep.locks'
   );
 
+  // Its own failure must not stop the refreshes below.
+  try {
+    results.receiptsDeleted = await deleteOldReceipts();
+  } catch (error) {
+    results.receiptsDeleted = { error: error.message };
+    log('error', 'receipt_cleanup_failed', { error: error.message });
+  }
+
   if (results.expired > 0) {
     await refreshPreorderPost(bot).catch(() => {});
     // An expired order drops out of delivery mode's active list - without
@@ -160,6 +204,7 @@ async function runTick({ deadline = Date.now() + config.worker.timeBudgetMs } = 
     ['payments', () => runProcessPayments(deadline)],
     ['sheet', () => runDrainSheetOutbox(deadline)],
     ['todaySheet', () => runRefreshTodaySheet()],
+    ['menuSheet', () => runSyncMenuSheet()],
     ['preorder', () => runRefreshPreorder()],
     ['sweep', () => runSweep()],
   ];
@@ -210,6 +255,7 @@ module.exports = {
   runProcessPayments,
   runDrainSheetOutbox,
   runRefreshTodaySheet,
+  runSyncMenuSheet,
   runRefreshPreorder,
   runSweep,
 };

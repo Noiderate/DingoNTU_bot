@@ -2,10 +2,11 @@ const crypto = require('crypto');
 const googleSheets = require('../services/googleSheets');
 const {
   isAdmin, getAdminIds, reloadAdminIds, addAdmin, deleteAdmin,
-  getFoodItems, addFoodItem, deleteFoodItem, updateFoodItemStock,
   getHalls, addHall, deleteHall,
   getPreorderAdminTag, getAdminUsernameById, writeToSheet,
 } = googleSheets;
+const menuStore = require('../services/menuStore');
+const { isTemporarilyUnavailable } = require('../utils/unavailable');
 const { CALLBACKS, STATES, isCallbackType, extractCallbackValue } = require('../config/constants');
 const keyboards = require('../utils/keyboards');
 const menuTexts = require('../utils/menuTexts');
@@ -16,10 +17,11 @@ const orderActions = require('../services/orderActions');
 const repo = require('../services/orderRepository');
 const stateStore = require('../services/stateStore');
 const cartStore = require('../services/cartStore');
+const statsService = require('../services/statsService');
 const paynowQr = require('../services/paynowQr');
 const { getMenuMessageId, setMenuMessageId, clearMenuMessageId, isMessageLatestInChat } = require('../services/chatTracker');
 const { config } = require('../config');
-const { formatCents } = require('../utils/money');
+const { formatCents, parsePriceInput } = require('../utils/money');
 const { isImageDocument } = require('../utils/telegramFiles');
 const { log } = require('../utils/logger');
 const {
@@ -61,16 +63,6 @@ async function setAdminState(userId, value) {
 async function clearAdminState(userId) {
   return stateStore.remove(stateStore.KEYS.adminInputState(userId));
 }
-
-/**
- * Stock writes share checkout's lock: checkout reads stock and writes back a
- * computed value, so an admin edit landing in between would otherwise be
- * silently overwritten (or overwrite the checkout's deduction).
- */
-function withStockLock(task) {
-  return stateStore.withLock(stateStore.LOCKS.confirmOrder(), task);
-}
-
 
 // --- Helpers (unchanged from the original) -----------------------------------
 
@@ -351,7 +343,7 @@ function buildPreorderIntro(hallLabel, customText) {
 async function buildPreorderMessageText(hallLabel, adminUsername, { customText = null, maxLength = Infinity } = {}) {
   // Throws rather than rendering "No food currently available" onto the public
   // post whenever a Sheets read blips.
-  const foodItems = await googleSheets.getFoodItemsOrThrow();
+  const foodItems = await menuStore.getFoodItemsOrThrow();
   const contactLine = adminUsername
     ? `Or for any delivery related issues, message @${adminUsername}.`
     : 'Or for any delivery related issues, please contact an admin.';
@@ -446,7 +438,7 @@ async function refreshPreorderPost(bot) {
   try {
     return await renderPreorderPost(bot);
   } catch (error) {
-    if (!googleSheets.isSheetsUnavailable(error)) {
+    if (!isTemporarilyUnavailable(error)) {
       throw error;
     }
     // Leave the live post as it is; the next scheduled refresh retries.
@@ -538,6 +530,8 @@ function findNewlySoldOutItems(changes) {
 
 /** One "sold out" post per item, best-effort - a failed send must not stop the rest. */
 async function announceSoldOut(bot, soldOutItems) {
+  await statsService.recordSoldOut(soldOutItems);
+
   const channelId = config.telegram.dingoChannelId;
 
   if (!channelId) {
@@ -578,7 +572,7 @@ async function repostPreorderAvailability(bot) {
 
     content = await renderPreorderContent(bot, nextHall.shortName || nextHall.name);
   } catch (error) {
-    if (!googleSheets.isSheetsUnavailable(error)) {
+    if (!isTemporarilyUnavailable(error)) {
       throw error;
     }
     // Keep the existing post rather than replace it with an empty menu; the
@@ -691,10 +685,10 @@ async function handlePreorderPreview(bot, chatId, answer) {
     const hall = halls.find(entry => !blocked.isBlocked(entry.name)) || halls[0];
     content = await renderPreorderContent(bot, hall ? (hall.shortName || hall.name) : 'your hall');
   } catch (error) {
-    if (!googleSheets.isSheetsUnavailable(error)) {
+    if (!isTemporarilyUnavailable(error)) {
       throw error;
     }
-    await answer('Could not read the menu from Google Sheets. Try again in a moment.', { show_alert: true });
+    await answer('Could not read the menu. Try again in a moment.', { show_alert: true });
     return true;
   }
 
@@ -851,7 +845,7 @@ async function handleSkipCommand(bot, chatId, userId) {
       reset_required: "Last round hasn't been reset yet. Tap Reset Halls and Orders in Delivery Mode before posting the preorder.",
       no_channel: 'DINGO_CHANNEL_ID is not set in the environment.',
       send_failed: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.',
-      sheets_unavailable: 'Could not read the menu from Google Sheets. Nothing was posted - try again in a moment.',
+      sheets_unavailable: 'Could not read the menu. Nothing was posted - try again in a moment.',
     };
 
     await bot.sendMessage(chatId, `❌ ${FAILURE_MESSAGES[result.reason] || 'Could not post.'}`);
@@ -901,7 +895,7 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
         return true;
       }
 
-      const result = await addFoodItem(parts[0], price);
+      const result = await menuStore.addFoodItem(parts[0], price);
       await bot.sendMessage(chatId, result.message);
       await clearAdminState(userId);
       await refreshPreorderPost(bot);
@@ -965,6 +959,48 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
     return false;
   }
 
+  if (state.mode === STATES.EDIT_FOOD_PRICE) {
+    const price = parsePriceInput(text);
+
+    if (price === null) {
+      // Stays in the prompt so the admin can simply type it again.
+      await bot.sendMessage(
+        chatId,
+        '❌ Invalid price. Send a number above 0 with at most 2 decimals, e.g. 5.99'
+      );
+      return true;
+    }
+
+    const result = await menuStore.updateFoodItemPrice(state.foodItemId, price);
+    const confirmation = await bot.sendMessage(chatId, result.message);
+    await clearAdminState(userId);
+
+    // The number typed in and its confirmation are only useful for the instant
+    // it takes to apply - clean them up so the self-editing menu (which now
+    // shows the new price) is the only thing left, as the stock prompts do.
+    try {
+      await bot.deleteMessage(chatId, messageId);
+    } catch (error) {
+      log('warn', 'price_edit_input_delete_failed', { error: error.message });
+    }
+    try {
+      await bot.deleteMessage(chatId, confirmation.message_id);
+    } catch (error) {
+      log('warn', 'price_edit_confirmation_delete_failed', { error: error.message });
+    }
+
+    const foodItems = await menuStore.getFoodItems();
+    await updateMenuMessage(
+      bot, chatId, userId,
+      menuTexts.manageFoodItemsText(foodItems),
+      keyboards.manageFoodItemsKeyboard()
+    );
+
+    // No preorder-post refresh: the public post lists only the names of items in
+    // stock, never prices, so a price change cannot change what it shows.
+    return true;
+  }
+
   if (state.mode === STATES.EDIT_FOOD_STOCK_SPECIFIC) {
     const newStock = Number.parseInt(text, 10);
 
@@ -973,9 +1009,9 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
       return true;
     }
 
-    const beforeItem = (await getFoodItems()).find(item => item.id === state.foodItemId);
+    const beforeItem = (await menuStore.getFoodItems()).find(item => item.id === state.foodItemId);
 
-    const result = await withStockLock(() => updateFoodItemStock(state.foodItemId, newStock));
+    const result = await menuStore.updateFoodItemStock(state.foodItemId, newStock);
     const confirmation = await bot.sendMessage(chatId, result.message);
     await clearAdminState(userId);
 
@@ -993,7 +1029,7 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
       log('warn', 'stock_edit_confirmation_delete_failed', { error: error.message });
     }
 
-    const foodItems = await getFoodItems();
+    const foodItems = await menuStore.getFoodItems();
     await updateMenuMessage(
       bot, chatId, userId,
       menuTexts.manageFoodItemsText(foodItems),
@@ -1017,7 +1053,7 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
     }
 
     const currentItem = state.items[state.currentIndex];
-    const saved = await withStockLock(() => updateFoodItemStock(currentItem.id, newStock));
+    const saved = await menuStore.updateFoodItemStock(currentItem.id, newStock);
 
     // Stay on this item so the admin can retry, rather than silently moving on.
     if (!saved.success) {
@@ -1055,7 +1091,7 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
       log('warn', 'stock_edit_completion_delete_failed', { error: error.message });
     }
 
-    const updatedItems = await getFoodItems();
+    const updatedItems = await menuStore.getFoodItems();
     await updateMenuMessage(
       bot, chatId, userId,
       menuTexts.manageFoodItemsText(updatedItems),
@@ -1554,6 +1590,7 @@ async function handlePaymentAccept(bot, query, chatId, userId, messageId, data) 
     await refreshDeliveryModeMenus(bot);
 
     await bot.answerCallbackQuery(query.id, { text: 'Payment accepted' });
+    await bringDeliveryMenuToBottom(bot, chatId, userId);
     return true;
   });
 }
@@ -1602,8 +1639,34 @@ async function handlePaymentReject(bot, query, chatId, userId, messageId, data) 
     await refreshHallServeOrdersMessage(bot, order.hallName);
 
     await bot.answerCallbackQuery(query.id, { text: `Payment rejected${result.restocked ? ' and stock restored' : ''}` });
+    await bringDeliveryMenuToBottom(bot, chatId, userId);
     return true;
   });
+}
+
+/**
+ * After an admin accepts or rejects a payment, move their delivery menu back to
+ * the bottom of their chat: the review card they just tapped sits below the
+ * menu, so the menu would otherwise be left stranded above it.
+ *
+ * Only for the admin who acted, and only if they have the delivery menu open.
+ * Background refreshes (other admins' taps, automatic approvals) keep editing
+ * in place on purpose - reposting on every one spammed notifications.
+ * Never throws: the payment decision has already been made.
+ */
+async function bringDeliveryMenuToBottom(bot, chatId, userId) {
+  try {
+    const viewing = await stateStore.get(stateStore.KEYS.deliveryViewer(userId));
+
+    if (!viewing) {
+      return;
+    }
+
+    await showDeliveryModeMenu(bot, chatId, userId);
+    await repositionHallServeMessagesBelowMenu(bot, chatId);
+  } catch (error) {
+    log('warn', 'delivery_menu_bring_down_failed', { error: error.message });
+  }
 }
 
 /** Status line for a rejection's review message - see orderActions.alertRestockFailed. */
@@ -1667,9 +1730,18 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   }
 
   if (data === CALLBACKS.ADMIN_STATS) {
+    // One Supabase query; a failure must not take the basic stats down with it.
+    let funStats = '';
+    try {
+      const { stats, capped } = await statsService.fetchStats();
+      funStats = statsService.formatFunStats(stats, capped);
+    } catch (error) {
+      log('warn', 'fun_stats_failed', { error: error.message });
+    }
+
     await updateMenuMessage(
       bot, chatId, userId,
-      menuTexts.adminStatsText(getAdminIds().length),
+      menuTexts.adminStatsText(getAdminIds().length) + funStats,
       keyboards.backToMainMenuKeyboard()
     );
     await answer();
@@ -1777,7 +1849,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   }
 
   if (data === CALLBACKS.SETTINGS_MANAGE_FOODS) {
-    const foodItems = await getFoodItems();
+    const foodItems = await menuStore.getFoodItems();
     await updateMenuMessage(
       bot, chatId, userId,
       menuTexts.manageFoodItemsText(foodItems),
@@ -1795,7 +1867,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   }
 
   if (data === CALLBACKS.FOOD_DELETE) {
-    const foodItems = await getFoodItems();
+    const foodItems = await menuStore.getFoodItems();
 
     if (foodItems.length === 0) {
       await updateMenuMessage(bot, chatId, userId, menuTexts.noFoodItemsText(), keyboards.backToFoodMenuKeyboard());
@@ -1823,14 +1895,14 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
 
     // The token guards against row numbers shifting between rendering the menu
     // and tapping it, which would otherwise delete the wrong item.
-    const liveItem = (await getFoodItems()).find(item => item.id === foodItemId);
+    const liveItem = (await menuStore.getFoodItems()).find(item => item.id === foodItemId);
 
     if (!liveItem || createCallbackItemToken(liveItem.name) !== token) {
       await answer('This delete button is outdated. Reopen Delete Food list.', { show_alert: true });
       return true;
     }
 
-    const result = await deleteFoodItem(foodItemId);
+    const result = await menuStore.deleteFoodItem(foodItemId);
     await updateMenuMessage(bot, chatId, userId, result.message, keyboards.backToFoodMenuKeyboard());
     await answer();
     await refreshPreorderPost(bot);
@@ -1838,7 +1910,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   }
 
   if (data === CALLBACKS.FOOD_EDIT_STOCK) {
-    const foodItems = await getFoodItems();
+    const foodItems = await menuStore.getFoodItems();
 
     if (foodItems.length === 0) {
       await updateMenuMessage(bot, chatId, userId, menuTexts.noFoodItemsText(), keyboards.backToFoodMenuKeyboard());
@@ -1869,7 +1941,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   }
 
   if (data === CALLBACKS.FOOD_EDIT_ALL_STOCK) {
-    const foodItems = await getFoodItems();
+    const foodItems = await menuStore.getFoodItems();
 
     if (foodItems.length === 0) {
       await updateMenuMessage(bot, chatId, userId, menuTexts.noFoodItemsText(), keyboards.backToFoodMenuKeyboard());
@@ -1883,6 +1955,45 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     await updateMenuMessage(
       bot, chatId, userId,
       menuTexts.editStockPromptText(first.name, first.stock || 0, 1, foodItems.length),
+      keyboards.cancelStockEditKeyboard()
+    );
+    await answer();
+    return true;
+  }
+
+  if (data === CALLBACKS.FOOD_EDIT_PRICE) {
+    const foodItems = await menuStore.getFoodItems();
+
+    if (foodItems.length === 0) {
+      await updateMenuMessage(bot, chatId, userId, menuTexts.noFoodItemsText(), keyboards.backToFoodMenuKeyboard());
+      await answer();
+      return true;
+    }
+
+    await updateMenuMessage(
+      bot, chatId, userId,
+      menuTexts.editPriceListText(),
+      keyboards.foodItemsEditPriceKeyboard(foodItems)
+    );
+    await answer();
+    return true;
+  }
+
+  if (isCallbackType(data, CALLBACKS.FOOD_EDIT_PRICE_PREFIX)) {
+    const foodItemId = Number.parseInt(extractCallbackValue(data, CALLBACKS.FOOD_EDIT_PRICE_PREFIX), 10);
+    const item = (await menuStore.getFoodItems()).find(entry => entry.id === foodItemId);
+
+    // The list was drawn a while ago: the item may have been deleted since.
+    if (!item) {
+      await answer('That item no longer exists. Reopen Edit Price.', { show_alert: true });
+      return true;
+    }
+
+    await setAdminState(userId, { mode: STATES.EDIT_FOOD_PRICE, foodItemId });
+
+    await updateMenuMessage(
+      bot, chatId, userId,
+      menuTexts.editPricePromptText(item.name, item.price),
       keyboards.cancelStockEditKeyboard()
     );
     await answer();
@@ -2295,7 +2406,7 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null, onP
   } catch (error) {
     // Only the preorder text reads the food list; better no post than one
     // announcing "No food currently available" because a read blipped.
-    if (googleSheets.isSheetsUnavailable(error)) {
+    if (isTemporarilyUnavailable(error)) {
       log('warn', 'dingo_post_sheets_unavailable', { error: error.message });
       return { posted: false, reason: 'sheets_unavailable' };
     }
@@ -2419,7 +2530,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
       reset_required: { text: "Last round hasn't been reset yet. Reset Halls and Orders before posting the preorder.", show_alert: true },
       no_channel: { text: 'DINGO_CHANNEL_ID is not set in the environment.', show_alert: true },
       send_failed: { text: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.', show_alert: true },
-      sheets_unavailable: { text: 'Could not read the menu from Google Sheets. Nothing was posted - try again in a moment.', show_alert: true },
+      sheets_unavailable: { text: 'Could not read the menu. Nothing was posted - try again in a moment.', show_alert: true },
     };
 
     timer.done();
@@ -3063,32 +3174,11 @@ async function handleResetHallsAndOrders(bot, chatId, messageId, answer) {
   }
 
   // Put stock back to whatever an admin last manually set it to (see
-  // updateFoodItemStock), undoing the night's consumption - not a running
-  // "add back what was rejected" total, the actual opening number.
-  const foodItems = await googleSheets.getFoodItems();
-  const stockBaselines = await stateStore.get(stateStore.KEYS.stockBaselines(), {});
-  const stockChanges = [];
-  const noBaselineItems = [];
-
-  for (const item of foodItems) {
-    if (!Object.prototype.hasOwnProperty.call(stockBaselines, item.name)) {
-      noBaselineItems.push(item.name);
-      continue;
-    }
-
-    const baseline = stockBaselines[item.name];
-    const oldStock = item.stock || 0;
-
-    if (oldStock !== baseline) {
-      stockChanges.push({ rowId: item.id, name: item.name, oldStock, newStock: baseline });
-    }
-  }
-
-  if (stockChanges.length) {
-    await withStockLock(() => googleSheets.updateFoodItemStocksBatch(
-      stockChanges.map(({ rowId, newStock }) => ({ rowId, newStock }))
-    ));
-  }
+  // menuStore.updateFoodItemStock), undoing the night's consumption - not a
+  // running "add back what was rejected" total, the actual opening number. One
+  // atomic statement in the database, so a checkout landing mid-reset can't be
+  // clobbered by it.
+  const { changes: stockChanges, noBaselineItems } = await menuStore.restoreStockBaselines();
 
   await setSequencer({ ...DEFAULT_SEQUENCER });
 
@@ -3124,6 +3214,10 @@ async function handleResetHallsAndOrders(bot, chatId, messageId, answer) {
     '✅ Halls and orders have been reset. Orders are now available to be placed by any hall, '
     + `starting from ${halls[0] ? halls[0].name : 'the first hall'}.${closedText}${reviewText}${stockText}${noBaselineText}`
   );
+
+  // The summary above landed below the delivery menu. Reset is tapped in the
+  // admin's own private chat, where the chat id is their user id.
+  await bringDeliveryMenuToBottom(bot, chatId, chatId);
 
   return true;
 }

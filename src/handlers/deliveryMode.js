@@ -1,4 +1,5 @@
 const googleSheets = require('../services/googleSheets');
+const menuStore = require('../services/menuStore');
 const keyboards = require('../utils/keyboards');
 const menuTexts = require('../utils/menuTexts');
 const orderStore = require('../services/orderStore');
@@ -262,11 +263,12 @@ async function isResetRequired(halls, blocked) {
 // --- Menu rendering ----------------------------------------------------------
 
 async function getDeliveryModeView() {
-  // Independent reads (two Sheets, three Supabase) run together: done one
-  // after another they made this the slowest part of every delivery tap.
+  // Independent reads (the halls from Sheets, the rest from Supabase) run
+  // together: done one after another they made this the slowest part of every
+  // delivery tap.
   const [halls, foodItems, orders, blocked, sequencer] = await Promise.all([
     googleSheets.getHalls(),
-    googleSheets.getFoodItems(),
+    menuStore.getFoodItems(),
     orderStore.getActiveOrders(),
     orderStore.loadBlockedHalls(),
     getSequencer(),

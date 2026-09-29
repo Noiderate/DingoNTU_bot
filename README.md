@@ -8,10 +8,14 @@ round that posts announcements to a public channel, and manage the menu. Payment
 screenshots are read automatically and either approved or sent to an admin.
 
 - **Orders, customers and payments** live in Supabase (Postgres).
-- **Settings, food, stock and halls** live in Google Sheets, where staff already
-  edit them.
-- **The Orders sheet tab** is a live mirror of Supabase, so the kitchen keeps the
-  view it is used to.
+- **The menu (food, prices, stock)** lives in Supabase too, and is edited in the
+  bot (Settings > Manage Food Items). Checkout deducts stock in one atomic
+  database statement, so many customers can order at once without queueing and
+  without overselling.
+- **Settings and halls** live in Google Sheets, where staff already edit them.
+- **The Orders, Today's Orders and FoodAndStock sheet tabs** are read-only
+  mirrors of Supabase, so the kitchen keeps the views it is used to. Edits made
+  to them are overwritten.
 
 ---
 
@@ -33,14 +37,16 @@ screenshots are read automatically and either approved or sent to an admin.
                      └──┬───┬───┬──┘
           ┌─────────────┘   │   └──────────────┐
           ▼                 ▼                  ▼
-   ┌────────────┐   ┌──────────────┐   ┌──────────────┐
-   │  Supabase  │   │ Google Sheets│   │ Dingo channel│
-   │            │   │              │   │              │
-   │ orders     │   │ Settings     │   │ preorder     │
-   │ customers  │   │ FoodAndStock │   │ coming/here  │
-   │ payments   │   │ Hall         │   └──────────────┘
-   │ all state  │   │ Orders(mirror)│
-   └─────┬──────┘   └──────────────┘
+   ┌────────────┐   ┌───────────────┐   ┌──────────────┐
+   │  Supabase  │   │ Google Sheets │   │ Dingo channel│
+   │            │   │               │   │              │
+   │ orders     │   │ Settings      │   │ preorder     │
+   │ customers  │   │ Hall          │   │ coming/here  │
+   │ payments   │   │ Orders, Today,│   └──────────────┘
+   │ menu+stock │   │ FoodAndStock  │
+   │ all state  │   │ (read-only    │
+   └─────┬──────┘   │  mirrors)     │
+         │          └───────────────┘
          │
          │  slow work via waitUntil, recovered by cron
          ▼
@@ -57,7 +63,7 @@ screenshots are read automatically and either approved or sent to an admin.
 ### Customer flow
 
 1. `/start` (or the channel's deep link) lists halls that are still open.
-2. Picking a hall shows the menu, built live from `FoodAndStock`.
+2. Picking a hall shows the menu, built live from the `menu_items` table.
 3. Tapping items builds a cart stored in Postgres.
 4. **Confirm Order** first checks the customer has a phone number on file
    (`customers.phone_number` - their first order, or any order predating this
@@ -257,6 +263,22 @@ supabase db push
 …or by pasting each file in `supabase/migrations/` into the SQL editor in order.
 
 Confirm afterwards that the `payment-receipts` bucket exists and is **private**.
+
+**Import the menu, once.** The menu lives in the `menu_items` table, which the
+migrations create empty. If you have food and stock in the `FoodAndStock` tab,
+copy them in before the first deploy (it needs the Supabase and Google Sheets
+variables from `.env.config` / `.env.secret` in place):
+
+```bash
+npm run menu:import
+```
+
+It refuses to run if the menu already has items (`-- --replace` wipes and
+re-imports), skips duplicate names, and records each item's current stock as its
+opening stock, which "Reset Halls and Orders" restores. From then on the tab is a
+read-only mirror: change food, prices and stock in the bot under Settings >
+Manage Food Items. Until items exist, the mirror deliberately leaves the tab
+alone.
 
 ### 2. Create the Vercel project
 
