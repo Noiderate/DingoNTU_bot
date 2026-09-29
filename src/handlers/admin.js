@@ -2116,29 +2116,59 @@ async function blockHallForAutoClosure(bot, hall) {
 }
 
 /**
+ * TEMPORARY: per-step timing for the slow "we are here" tap. Logs one
+ * `timing` line with each step's duration in ms. Remove once the slow step is
+ * found and fixed.
+ */
+function createStepTimer(label, meta = {}) {
+  const start = Date.now();
+  const steps = {};
+  let logged = false;
+
+  return {
+    async step(name, fn) {
+      const stepStart = Date.now();
+      try {
+        return await fn();
+      } finally {
+        steps[name] = Date.now() - stepStart;
+      }
+    },
+    done() {
+      if (logged) {
+        return;
+      }
+      logged = true;
+      log('info', 'timing', { label, total_ms: Date.now() - start, steps, ...meta });
+    },
+  };
+}
+
+/**
  * Core channel-post + sequencer-advance logic, shared by the manual admin tap
  * (preorder/here) and the automatic get-ready/coming triggers fired by serve
  * progress. Never throws for an expected failure (stale button, missing
  * channel, a Telegram send error) - callers decide how to surface that.
  */
-async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
+async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null, onPosted = null }) {
   let holder = null;
+  const timer = createStepTimer('dingo_post', { mode: postMode });
 
   try {
-    holder = await stateStore.acquireLock(stateStore.LOCKS.deliveryPost(), { leaseMs: 30000 });
+    holder = await timer.step('lock', () => stateStore.acquireLock(stateStore.LOCKS.deliveryPost(), { leaseMs: 30000 }));
 
     if (!holder) {
       return { posted: false, reason: 'locked' };
     }
 
-    const halls = await googleSheets.getHalls();
+    const halls = await timer.step('getHalls', () => googleSheets.getHalls());
     const hall = halls.find(entry => entry.id === hallId);
 
     if (!hall || !['preorder', 'coming', 'here', 'get-ready'].includes(postMode)) {
       return { posted: false, reason: 'hall_not_found' };
     }
 
-    if (!await isExpectedNextHallToPost(halls, hallId, postMode)) {
+    if (!await timer.step('expectedCheck', () => isExpectedNextHallToPost(halls, hallId, postMode))) {
       await refreshDeliveryModeMenus(bot);
       return { posted: false, reason: 'stale' };
     }
@@ -2175,45 +2205,69 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
 
     let sent;
     try {
-      sent = preorderContent
-        ? await sendPreorderContent(bot, channelId, preorderContent)
-        : await bot.sendMessage(channelId, text, {});
+      sent = await timer.step('sendChannel', () => (preorderContent
+        ? sendPreorderContent(bot, channelId, preorderContent)
+        : bot.sendMessage(channelId, text, {})));
     } catch (error) {
       log('error', 'dingo_post_failed', { hall: hallLabel, error: error.message });
       return { posted: false, reason: 'send_failed' };
     }
 
-    const toDelete = await getDingoMsgIdsToDelete(postMode);
-
-    if (preorderContent) {
-      await recordPreorderPost(channelId, sent.message_id, preorderContent.photoFileId);
-    } else {
-      await recordDingoPost(postMode, sent.message_id);
+    // The channel post is out, so the admin's button can stop spinning now
+    // rather than after all the bookkeeping below.
+    if (onPosted) {
+      await timer.step('onPosted', async () => {
+        try {
+          await onPosted({ text, hall, hallLabel });
+        } catch (error) {
+          log('warn', 'dingo_on_posted_failed', { error: error.message });
+        }
+      });
     }
 
-    for (const msgId of toDelete) {
-      try {
-        await bot.deleteMessage(channelId, msgId);
-      } catch (error) {
-        log('warn', 'dingo_delete_failed', { error: error.message });
+    const toDelete = await timer.step('msgIds', () => getDingoMsgIdsToDelete(postMode));
+
+    await timer.step('recordPost', async () => {
+      if (preorderContent) {
+        await recordPreorderPost(channelId, sent.message_id, preorderContent.photoFileId);
+      } else {
+        await recordDingoPost(postMode, sent.message_id);
       }
-    }
+    });
 
-    await advanceNextHallToPost(halls, hallId, postMode);
-    await refreshDeliveryModeMenus(bot);
+    await timer.step('deleteOld', async () => {
+      for (const msgId of toDelete) {
+        try {
+          await bot.deleteMessage(channelId, msgId);
+        } catch (error) {
+          log('warn', 'dingo_delete_failed', { error: error.message });
+        }
+      }
+    });
 
+    await timer.step('advance', () => advanceNextHallToPost(halls, hallId, postMode));
+
+    // Before the menu refresh: the serve list is what the admin is waiting on,
+    // and it doesn't depend on the menu. The sequencer has already advanced,
+    // which is all the refresh needs.
     if (postMode === 'here' && notifyChatId) {
-      const hallOrders = await refreshHallServeOrdersCache(hall.name);
+      await timer.step('serveList', async () => {
+        const hallOrders = await refreshHallServeOrdersCache(hall.name);
 
-      if (hallOrders.length > 0) {
-        const serveMsg = await bot.sendMessage(
-          notifyChatId,
-          HALL_SERVE_LIST_HEADER(hall.name),
-          { reply_markup: buildHallCustomerListKeyboard(hall.name, hallOrders) }
-        );
-        await recordHallServeMessage(hall.name, notifyChatId, serveMsg.message_id);
-      }
-    } else if (postMode === 'get-ready') {
+        if (hallOrders.length > 0) {
+          const serveMsg = await bot.sendMessage(
+            notifyChatId,
+            HALL_SERVE_LIST_HEADER(hall.name),
+            { reply_markup: buildHallCustomerListKeyboard(hall.name, hallOrders) }
+          );
+          await recordHallServeMessage(hall.name, notifyChatId, serveMsg.message_id);
+        }
+      });
+    }
+
+    await timer.step('refreshMenus', () => refreshDeliveryModeMenus(bot));
+
+    if (postMode === 'get-ready') {
       await notifyHallCustomers(
         bot,
         hall.name,
@@ -2240,8 +2294,9 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null }) {
     throw error;
   } finally {
     if (holder) {
-      await stateStore.releaseLock(stateStore.LOCKS.deliveryPost(), holder);
+      await timer.step('releaseLock', () => stateStore.releaseLock(stateStore.LOCKS.deliveryPost(), holder));
     }
+    timer.done();
   }
 }
 
@@ -2313,7 +2368,21 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
   const [postMode, hallIdValue] = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX).split(':');
   const hallId = Number.parseInt(hallIdValue, 10);
 
-  const result = await postDingoUpdate(bot, { hallId, postMode, notifyChatId: chatId });
+  const timer = createStepTimer('delivery_post_tap', { mode: postMode });
+
+  // Answered as soon as the channel post is out (see postDingoUpdate's
+  // onPosted), since Telegram allows one answer per query. Failures never reach
+  // onPosted, so they still get their specific alert below.
+  let answered = false;
+  const answerPosted = async ({ text }) => {
+    answered = true;
+    await bot.answerCallbackQuery(
+      query.id,
+      { text: postMode === 'preorder' ? 'Posted preorder availability to Dingo channel.' : `Posted to Dingo channel: ${text}` }
+    );
+  };
+
+  const result = await timer.step('post', () => postDingoUpdate(bot, { hallId, postMode, notifyChatId: chatId, onPosted: answerPosted }));
 
   if (!result.posted) {
     const FAILURE_RESPONSES = {
@@ -2326,22 +2395,23 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
       sheets_unavailable: { text: 'Could not read the menu from Google Sheets. Nothing was posted - try again in a moment.', show_alert: true },
     };
 
+    timer.done();
     await bot.answerCallbackQuery(query.id, FAILURE_RESPONSES[result.reason] || { text: 'Could not post update.', show_alert: true });
     return true;
   }
 
-  await bot.answerCallbackQuery(
-    query.id,
-    { text: postMode === 'preorder' ? 'Posted preorder availability to Dingo channel.' : `Posted to Dingo channel: ${result.text}` }
-  );
+  if (!answered) {
+    await answerPosted(result);
+  }
 
   if (postMode === 'here') {
     // The lock from the post above is already released by now, so this is
     // free to take it again for whatever it posts (e.g. a hall nobody
     // ordered from, whose get-ready/coming can fire immediately).
-    await autoAdvanceDeliveryStage(bot, result.hall.name);
+    await timer.step('autoAdvance', () => autoAdvanceDeliveryStage(bot, result.hall.name));
   }
 
+  timer.done();
   return true;
 }
 
