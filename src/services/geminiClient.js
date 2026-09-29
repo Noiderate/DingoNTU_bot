@@ -286,41 +286,46 @@ async function callModel(model, imageBuffer, mimeType) {
 /**
  * Extract structured fields from a receipt image.
  *
- * Tries the configured model first. If that specifically fails on a quota/rate
- * limit error or a server overload error, and a fallback model is configured,
- * it is tried immediately in the same call rather than burning the caller's
+ * Tries the first model in config.gemini.models. If that specifically fails on
+ * a quota/rate limit error or a server overload error, the next model in the
+ * list is tried immediately in the same call, rather than burning the caller's
  * retry budget re-hitting a model that will not recover until its daily quota
  * resets (or that is currently overloaded). Any other error - or the same kind
- * of error from the fallback too - is thrown as-is for the caller's normal
- * backoff-and-retry loop to handle.
+ * of error from the last model in the list - is thrown as-is for the caller's
+ * normal backoff-and-retry loop to handle.
  *
  * @param {Buffer} imageBuffer
  * @param {string} mimeType
  * @returns {Promise<{ extraction: object, raw: object, model: string }>}
  */
 async function extractReceipt(imageBuffer, mimeType) {
-  const primary = config.gemini.model;
-  const fallback = config.gemini.fallbackModel;
+  const chain = config.gemini.models;
 
-  try {
-    return await callModel(primary, imageBuffer, mimeType);
-  } catch (error) {
-    const isQuota = isQuotaError(error);
-    const isOverloaded = isOverloadedError(error);
+  for (let index = 0; index < chain.length; index += 1) {
+    try {
+      return await callModel(chain[index], imageBuffer, mimeType);
+    } catch (error) {
+      const next = chain[index + 1];
+      const isQuota = isQuotaError(error);
+      const isOverloaded = isOverloadedError(error);
 
-    if (!fallback || fallback === primary || !(isQuota || isOverloaded)) {
-      throw error;
+      // Nothing left to try, or not the kind of error another model helps with:
+      // thrown as-is for the caller's normal backoff-and-retry loop.
+      if (!next || !(isQuota || isOverloaded)) {
+        throw error;
+      }
+
+      log('warn', 'gemini_fallback_triggered', {
+        primary: chain[index],
+        fallback: next,
+        status: error.status,
+        reason: isQuota ? 'quota' : 'overloaded',
+      });
     }
-
-    log('warn', 'gemini_fallback_triggered', {
-      primary,
-      fallback,
-      status: error.status,
-      reason: isQuota ? 'quota' : 'overloaded',
-    });
-
-    return callModel(fallback, imageBuffer, mimeType);
   }
+
+  // Unreachable: the last model's error is always thrown above.
+  throw new GeminiError('No Gemini model configured', { retryable: false });
 }
 
 module.exports = {

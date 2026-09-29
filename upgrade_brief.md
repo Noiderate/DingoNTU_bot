@@ -499,7 +499,7 @@ Create `src/services/paymentVerifier.js` and `src/services/geminiClient.js`. Whe
 ### 8.2 Gemini call
 
 - Use Google's current official Gen AI SDK for Node (`@google/genai`). Check the current docs; don't use deprecated packages.
-- Read the model from `GEMINI_MODEL`, defaulting to the current generally-available **Flash** model. Look up the current model ID in Google's docs instead of guessing, and note which one you chose.
+- Use the current generally-available **Flash** model, set in code (`GEMINI_MODELS` in `src/config.js`). Look up the current model ID in Google's docs instead of guessing, and note which one you chose.
 - Send the image inline as base64 with the correct MIME type.
 - Use **structured output**: `responseMimeType: "application/json"` with a `responseSchema`. Use low temperature (0).
 - Set a per-request timeout (e.g. 30s) with `AbortController`.
@@ -698,7 +698,6 @@ SUPABASE_RECEIPTS_BUCKET=payment-receipts
 
 # Gemini
 GEMINI_API_KEY=
-GEMINI_MODEL=            # current GA Flash model id
 GEMINI_MAX_CONCURRENCY=2
 GEMINI_RPM=
 VERIFY_SLOW_THRESHOLD_MS=8000
@@ -860,7 +859,7 @@ Create `MAINTENANCE.md` at the repo root. It is the long-term handbook for whoev
      - applying new migrations safely
      - never disabling RLS
    - **Gemini.** Covers:
-     - model deprecation or renaming (update `GEMINI_MODEL`, then re-run the rules and pipeline tests)
+     - model deprecation or renaming (update `GEMINI_MODELS` in `src/config.js`, then re-run the rules and pipeline tests)
      - API key expiry or billing problems
      - rate limits and quota changes (tune `GEMINI_RPM` and `GEMINI_MAX_CONCURRENCY`)
      - cost monitoring

@@ -576,18 +576,51 @@ function parseHallRows(values) {
  * Read all halls from Hall sheet. Returns [] on a read failure - see
  * getFoodItems for when to use getHallsOrThrow instead.
  */
-async function getHalls() {
+async function getHalls(options) {
   try {
-    return await getHallsOrThrow();
+    return await getHallsOrThrow(options);
   } catch (error) {
     console.error('Error reading halls:', error.message);
-    return [];
+
+    // Sheets is down: an old list beats no halls at all, which would make the
+    // delivery menu and posts behave as if the night had no halls.
+    return hallsCache ? cloneHalls(hallsCache) : [];
   }
 }
 
-async function getHallsOrThrow() {
+// Halls change about once a month but were read on nearly every tap (~400ms
+// each). Cached per warm instance; other instances pick a change up when their
+// own copy expires. addHall/deleteHall drop it immediately, and screens where
+// a stale list could do damage pass { fresh: true }.
+const HALLS_CACHE_TTL_MS = 10 * 60 * 1000;
+let hallsCache = null;
+let hallsCachedAt = 0;
+
+function cloneHalls(halls) {
+  return halls.map(hall => ({ ...hall }));
+}
+
+function invalidateHallsCache() {
+  hallsCache = null;
+  hallsCachedAt = 0;
+}
+
+async function getHallsOrThrow({ fresh = false } = {}) {
+  if (!fresh && hallsCache && Date.now() - hallsCachedAt < HALLS_CACHE_TTL_MS) {
+    return cloneHalls(hallsCache);
+  }
+
   const values = await readSheetValues('Hall!A2:B'); // Start from A2 (skip header)
-  return parseHallRows(values);
+  const halls = parseHallRows(values);
+
+  // Empty is not cached: it is indistinguishable from a bad read, and a hall
+  // list that wrongly sticks at [] would block every order for the TTL.
+  if (halls.length > 0) {
+    hallsCache = cloneHalls(halls);
+    hallsCachedAt = Date.now();
+  }
+
+  return halls;
 }
 
 /**
@@ -614,6 +647,8 @@ async function addHall(name) {
   } catch (error) {
     console.error('Error adding hall:', error.message);
     return { success: false, message: `✗ Failed to add hall: ${error.message}` };
+  } finally {
+    invalidateHallsCache();
   }
 }
 
@@ -669,6 +704,9 @@ async function deleteHall(rowId) {
   } catch (error) {
     console.error('Error deleting hall:', error.message);
     return { success: false, message: `✗ Failed to delete hall: ${error.message}` };
+  } finally {
+    // Even on failure: the clear/rewrite may have got part-way.
+    invalidateHallsCache();
   }
 }
 
@@ -729,6 +767,7 @@ module.exports = {
   updateFoodItemStocksBatch,
   getHalls,
   getHallsOrThrow,
+  invalidateHallsCache,
   parseHallRows,
   addHall,
   deleteHall,

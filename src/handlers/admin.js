@@ -1896,7 +1896,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   if (data === CALLBACKS.SETTINGS_MANAGE_HALLS) {
     await updateMenuMessage(
       bot, chatId, userId,
-      menuTexts.manageHallsText(await getHalls()),
+      menuTexts.manageHallsText(await getHalls({ fresh: true })),
       keyboards.manageHallsKeyboard()
     );
     await answer();
@@ -1911,7 +1911,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   }
 
   if (data === CALLBACKS.HALL_DELETE) {
-    const halls = await getHalls();
+    const halls = await getHalls({ fresh: true });
 
     if (halls.length === 0) {
       await updateMenuMessage(bot, chatId, userId, 'No halls to delete.', keyboards.backToHallsKeyboard());
@@ -1937,7 +1937,6 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
       return true;
     }
 
-    const liveHall = (await getHalls()).find(hall => hall.id === hallId);
 
     if (!liveHall || createCallbackItemToken(liveHall.name) !== token) {
       await answer('This delete button is outdated. Reopen Delete Hall list.', { show_alert: true });
@@ -2150,7 +2149,7 @@ function createStepTimer(label, meta = {}) {
  * progress. Never throws for an expected failure (stale button, missing
  * channel, a Telegram send error) - callers decide how to surface that.
  */
-async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null, onPosted = null }) {
+async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null, onPosted = null, refreshMenus = true }) {
   let holder = null;
   const timer = createStepTimer('dingo_post', { mode: postMode });
 
@@ -2161,7 +2160,9 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null, onP
       return { posted: false, reason: 'locked' };
     }
 
-    const halls = await timer.step('getHalls', () => googleSheets.getHalls());
+    // The preorder post starts a round, so it re-reads halls from the sheet;
+    // every other stage uses the cache (see googleSheets.getHallsOrThrow).
+    const halls = await timer.step('getHalls', () => googleSheets.getHalls({ fresh: postMode === 'preorder' }));
     const hall = halls.find(entry => entry.id === hallId);
 
     if (!hall || !['preorder', 'coming', 'here', 'get-ready'].includes(postMode)) {
@@ -2265,22 +2266,26 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null, onP
       });
     }
 
-    await timer.step('refreshMenus', () => refreshDeliveryModeMenus(bot));
+    // A cascade of automatic posts passes refreshMenus: false and refreshes
+    // once itself when it is done (see autoAdvanceDeliveryStage).
+    if (refreshMenus) {
+      await timer.step('refreshMenus', () => refreshDeliveryModeMenus(bot));
+    }
 
     if (postMode === 'get-ready') {
-      await notifyHallCustomers(
+      await timer.step('notifyCustomers', () => notifyHallCustomers(
         bot,
         hall.name,
         `🔔 Get ready! The delivery is finishing up the current hall and ${hallLabel} is next. `
         + `Start heading down soon.`
-      );
+      ));
     } else if (postMode === 'coming') {
-      await blockHallForAutoClosure(bot, hall);
-      await notifyHallCustomers(
+      await timer.step('blockHall', () => blockHallForAutoClosure(bot, hall));
+      await timer.step('notifyCustomers', () => notifyHallCustomers(
         bot,
         hall.name,
         `🚚 We're on our way to ${hallLabel} now! Come down and collect your order.`
-      );
+      ));
     }
 
     return { posted: true, text, hall, hallLabel };
@@ -2335,31 +2340,50 @@ async function autoAdvanceDeliveryStage(bot, hallName) {
 
   const progress = await orderStore.getHallServeProgress(hallName);
 
-  for (let guard = 0; guard < 3; guard += 1) {
-    const { hall: nextHall, mode } = await getNextHallToPostState(halls);
-    const gatingHall = await getGatingHall(halls);
+  // Each post in the cascade skips its own menu refresh (a full rebuild of the
+  // admin menu, ~2s each); one refresh here covers them all. In a finally so
+  // a failure or early return part-way through still leaves the menu current.
+  let postedAny = false;
 
-    if (!nextHall || !gatingHall || gatingHall.name !== hallName
-      || !meetsAutoPostThreshold(mode, progress.fraction)) {
-      return;
-    }
+  try {
+    for (let guard = 0; guard < 3; guard += 1) {
+      const { hall: nextHall, mode } = await getNextHallToPostState(halls);
+      const gatingHall = await getGatingHall(halls);
 
-    const result = await postDingoUpdate(bot, { hallId: nextHall.id, postMode: mode });
-
-    if (!result.posted) {
-      // Most likely 'locked' (a concurrent tap/tick got there first) or
-      // 'stale' (someone else already advanced past this) - both harmless,
-      // whatever holds the lock/is current will have driven this forward
-      // itself. hall_not_found/no_channel/send_failed are not: those mean
-      // this cascade silently stopped and nothing else will retry it, which
-      // used to be untraceable. /skip (handleSkipCommand) is the manual
-      // recovery for exactly this.
-      if (result.reason !== 'locked' && result.reason !== 'stale') {
-        log('warn', 'auto_advance_post_failed', {
-          hall: hallName, next_hall: nextHall.name, mode, reason: result.reason,
-        });
+      if (!nextHall || !gatingHall || gatingHall.name !== hallName
+        || !meetsAutoPostThreshold(mode, progress.fraction)) {
+        return;
       }
-      return;
+
+      // Set before the call: a post that throws part-way may still have
+      // advanced the sequencer, and the menu must reflect that.
+      postedAny = true;
+      const result = await postDingoUpdate(bot, { hallId: nextHall.id, postMode: mode, refreshMenus: false });
+
+      if (!result.posted) {
+        // Most likely 'locked' (a concurrent tap/tick got there first) or
+        // 'stale' (someone else already advanced past this) - both harmless,
+        // whatever holds the lock/is current will have driven this forward
+        // itself. hall_not_found/no_channel/send_failed are not: those mean
+        // this cascade silently stopped and nothing else will retry it, which
+        // used to be untraceable. /skip (handleSkipCommand) is the manual
+        // recovery for exactly this.
+        if (result.reason !== 'locked' && result.reason !== 'stale') {
+          log('warn', 'auto_advance_post_failed', {
+            hall: hallName, next_hall: nextHall.name, mode, reason: result.reason,
+          });
+        }
+        return;
+      }
+    }
+  } finally {
+    if (postedAny) {
+      try {
+        await refreshDeliveryModeMenus(bot);
+      } catch (error) {
+        // Never let a menu refresh hide the cascade's own error.
+        log('warn', 'auto_advance_menu_refresh_failed', { error: error.message });
+      }
     }
   }
 }

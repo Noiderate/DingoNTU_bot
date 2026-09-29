@@ -262,15 +262,24 @@ async function isResetRequired(halls, blocked) {
 // --- Menu rendering ----------------------------------------------------------
 
 async function getDeliveryModeView() {
-  const halls = await googleSheets.getHalls();
-  const foodItems = await googleSheets.getFoodItems();
-  const orders = await orderStore.getActiveOrders();
-  const blocked = await orderStore.loadBlockedHalls();
+  // Independent reads (two Sheets, three Supabase) run together: done one
+  // after another they made this the slowest part of every delivery tap.
+  const [halls, foodItems, orders, blocked, sequencer] = await Promise.all([
+    googleSheets.getHalls(),
+    googleSheets.getFoodItems(),
+    orderStore.getActiveOrders(),
+    orderStore.loadBlockedHalls(),
+    getSequencer(),
+  ]);
 
-  const { hall: nextHallToPost, mode } = await getNextHallToPostState(halls);
+  // These need the halls, but not each other.
+  const [{ hall: nextHallToPost, mode }, gatingHall] = await Promise.all([
+    getNextHallToPostState(halls),
+    getGatingHall(halls),
+  ]);
+
   const allHallsBlocked = halls.length > 0 && halls.every(hall => blocked.isBlocked(hall.name));
 
-  const gatingHall = await getGatingHall(halls);
   const gatingProgress = gatingHall ? await orderStore.getHallServeProgress(gatingHall.name) : null;
 
   // The first hall's 'coming' has no gating hall (see getGatingHall) and
@@ -294,7 +303,7 @@ async function getDeliveryModeView() {
 
   const resetRequired = mode === 'preorder' && await isResetRequired(halls, blocked);
 
-  const serveListHalls = visitedHalls(halls, await getSequencer())
+  const serveListHalls = visitedHalls(halls, sequencer)
     .map(hall => ({ hall, count: orders.filter(order => order.hallName === hall.name).length }))
     .filter(entry => entry.count > 0);
 

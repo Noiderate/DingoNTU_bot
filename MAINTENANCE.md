@@ -436,20 +436,22 @@ existing ones.
 
 | Problem | Symptom | Fix |
 |---|---|---|
-| Model renamed or retired | every verification errors, all receipts flagged | Update `GEMINI_MODEL`, redeploy, run `npm test` |
+| Model renamed or retired | every verification errors, all receipts flagged | Update `GEMINI_MODELS` in `src/config.js`, redeploy, run `npm test` |
 | Key expired / billing off | same | New key from AI Studio → `GEMINI_API_KEY` → redeploy |
 | Rate limited | slow notices, retries, jobs lingering `queued` | Lower `GEMINI_MAX_CONCURRENCY`, or raise `GEMINI_RPM` on a paid tier |
-| Primary model's daily quota exhausted | `gemini_fallback_triggered` warn logs; check `payment_submissions.gemini_model` to see which model actually answered | Nothing, by design — see below. If it's still not enough, raise the free-tier limit on a paid plan, or point `GEMINI_FALLBACK_MODEL` at a model with more daily headroom |
+| Primary model's daily quota exhausted | `gemini_fallback_triggered` warn logs; check `payment_submissions.gemini_model` to see which model actually answered | Nothing, by design — see below. If it's still not enough, raise the free-tier limit on a paid plan, or add a model with more daily headroom to `GEMINI_MODELS` in `src/config.js` |
 | SDK breaking change | build or runtime errors in `geminiClient.js` | Pin the old version, then migrate deliberately |
 
-**A 429 on the primary model doesn't wait it out.** `geminiClient.js` tries
-`GEMINI_FALLBACK_MODEL` (default a Flash Lite model, which gets a much higher
-free-tier daily quota) immediately when the primary model reports a quota/rate
-limit error, rather than burning `VERIFY_MAX_ATTEMPTS` retries against a model
-that will not recover until its daily reset. Every other retryable error
-(timeout, 5xx, overload) still backs off and retries the *same* model, since
-those genuinely are transient. Set `GEMINI_FALLBACK_MODEL=` (empty) to disable
-this and go back to plain retries.
+**A 429 on a model doesn't wait it out.** The models are hardcoded, in order,
+as `GEMINI_MODELS` in `src/config.js` (two Flash Lite models first, which get a
+much higher free-tier daily quota, then 3.8 Flash as the last resort).
+`geminiClient.js` moves to the next one immediately when a model reports a
+quota/rate limit or overload error, rather than burning `VERIFY_MAX_ATTEMPTS`
+retries against a model that will not recover until its daily reset. Each model
+has its own quota, so every extra one adds headroom. Every other retryable
+error (timeout, malformed response) still backs off and retries, since those
+genuinely are transient. To disable this and go back to plain retries, leave a
+single model in the list.
 
 **When Gemini is completely down, ordering still works.** Every receipt is
 flagged to admins and nothing is auto-approved. Customers see "an admin will
@@ -768,7 +770,7 @@ status has both, so they will fail until you do.
 (**right-hand side only**), add the value in `buildRow`, update `LAST_COLUMN`,
 update the test asserting the header list.
 
-**Swapping the Gemini model** — change `GEMINI_MODEL`, redeploy, run `npm test`,
+**Swapping the Gemini model** — change `GEMINI_MODELS` in `src/config.js`, redeploy, run `npm test`,
 then verify against real receipts from at least two different banks.
 
 **A new receipt test fixture** — copy `raw_extraction` from a real submission

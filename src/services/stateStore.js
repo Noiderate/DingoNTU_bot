@@ -265,6 +265,8 @@ const LOCKS = {
   deliveryPost: () => 'delivery:post',
   // Makes consuming the reset token and running the reset one step.
   deliveryReset: () => 'delivery:reset',
+  // Rate-limits how often the Today's Orders tab is rewritten (see todaySheet).
+  todaySheetRefresh: () => 'todaysheet:refresh',
 };
 
 module.exports = {

@@ -6,6 +6,7 @@ const {
   batchUpdateSpreadsheet,
 } = require('./googleSheets');
 const { getSupabase, unwrap } = require('./supabase');
+const stateStore = require('./stateStore');
 const { STATUS_LABELS, paymentStatusFor } = require('./sheetMirror');
 const { SGT } = require('../utils/time');
 const { log } = require('../utils/logger');
@@ -34,6 +35,9 @@ const COLUMN_COUNT = HEADERS.length;
 // Orders that never actually happened don't belong in a "what to prepare"
 // total - only their listing row above still shows they were attempted.
 const EXCLUDED_FROM_TOTALS = new Set(['rejected', 'cancelled', 'expired']);
+
+// The tab is rewritten at most once per this interval, across all instances.
+const REFRESH_MIN_INTERVAL_MS = 20 * 1000;
 
 // Best-effort, per-instance cache so a busy period doesn't re-fetch
 // spreadsheet metadata on every single order change.
@@ -160,6 +164,25 @@ async function applyFormatting(sheetId, { totalsHeaderRowIndex, totalsColumnHead
  * special-cased job.
  */
 async function refreshTodaySheet() {
+  // Every refresh is 3 Sheets writes and the whole tab is rebuilt, but the
+  // Sheets write quota (60/min for our service account) is shared with stock
+  // deduction at checkout. Rewriting after every order change used up the quota
+  // the customers needed, so at most one refresh runs per interval.
+  //
+  // The lease is deliberately never released: it expiring is what opens the
+  // next slot. It is atomic across serverless instances, and also stops two of
+  // them clearing and rewriting the tab at the same moment. A change that lands
+  // inside the window is picked up by the next drain, or at the latest by the
+  // once-a-minute scheduler.
+  const holder = await stateStore.acquireLock(
+    stateStore.LOCKS.todaySheetRefresh(),
+    { leaseMs: REFRESH_MIN_INTERVAL_MS }
+  );
+
+  if (!holder) {
+    return { throttled: true };
+  }
+
   if (!cachedSheetId) {
     cachedSheetId = await ensureSheetTab(SHEET_TITLE);
   }

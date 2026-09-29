@@ -39,6 +39,18 @@ function readList(name) {
     .filter(Boolean);
 }
 
+// Receipt-reading models, tried in this order. Hardcoded on purpose rather than
+// read from the environment: the order is a deliberate quota strategy, and a
+// stale variable in the deployment must not silently change it.
+//
+// Every model has its own quota, and a quota/rate-limit or overload error moves
+// on to the next one immediately (see geminiClient.extractReceipt), so each
+// extra model adds headroom and keeps verification automatic rather than
+// flagging receipts to a human until a daily reset. The two Flash-Lite models
+// come first for their far higher free-tier daily quota (500/day against 20 for
+// 3.8 Flash); the newer 3.5 leads. 3.8 Flash is the last resort.
+const GEMINI_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+
 // Private keys are stored single-line with literal \n escapes because dotenv
 // files cannot hold real newlines. Pasting a genuine multi-line key into the
 // Vercel dashboard also works, hence handling both.
@@ -73,13 +85,10 @@ const config = {
 
   gemini: {
     apiKey: readString('GEMINI_API_KEY'),
-    model: readString('GEMINI_MODEL', 'gemini-3.8-flash'),
-    // Tried when the primary model reports a quota/rate-limit error (429).
-    // Lite tiers get a far higher daily request quota than the primary model,
-    // so this is what keeps verification automatic once the primary's quota
-    // runs out for the day, rather than flagging every receipt to a human
-    // until the reset. Set to '' to disable and fall back to plain retries.
-    fallbackModel: readString('GEMINI_FALLBACK_MODEL', 'gemini-3.1-flash-lite'),
+    models: GEMINI_MODELS,
+    // The first model, i.e. the one tried first. Recorded on a new submission
+    // and reported by the health endpoint.
+    model: GEMINI_MODELS[0],
     maxConcurrency: readInt('GEMINI_MAX_CONCURRENCY', 2),
     requestsPerMinute: readInt('GEMINI_RPM', 15),
     slowThresholdMs: readInt('VERIFY_SLOW_THRESHOLD_MS', 8000),
