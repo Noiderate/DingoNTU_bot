@@ -261,6 +261,9 @@ const LOCKS = {
   // Guards admin Confirm/Reject and payment Accept/Reject for one order, so two
   // admins tapping at once cannot both act.
   orderAction: orderId => `order:action:${orderId}`,
+  // Serialises one customer's cart read-modify-write, so rapid taps cannot
+  // overwrite each other (see cartStore).
+  cart: userId => `cart:${userId}`,
   // Serialises delivery-mode channel posts.
   deliveryPost: () => 'delivery:post',
   // Makes consuming the reset token and running the reset one step.

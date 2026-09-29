@@ -472,7 +472,8 @@ async function handleAddFood(bot, query, chatId, userId, data) {
   const cart = await cartStore.getCart(userId);
 
   if (!cart.hallName) {
-    await answerCallbackSafely(bot, query.id, 'Please select a hall first using /start', { show_alert: true });
+    // No popup: taps queued behind a confirm land here once the cart is gone.
+    await answerCallbackSafely(bot, query.id, 'Please select a hall first using /start');
     return true;
   }
 
@@ -559,7 +560,11 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
       const cart = await cartStore.getCart(userId);
 
       if (!cart.hallName) {
-        await answerOrSend(bot, query, 'Please select a hall first using /start', { show_alert: true });
+        // Usually a repeated tap on Confirm: the first one already placed the
+        // order and cleared the cart. Answer quietly (no popup, and no chat
+        // message if the query has expired) instead of repeating an error for
+        // every extra tap.
+        await answerCallbackSafely(bot, query.id, 'Your order was already submitted. Use /start to order again.');
         return null;
       }
 

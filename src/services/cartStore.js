@@ -1,4 +1,5 @@
-const { getSupabase, unwrap } = require('./supabase');
+﻿const { getSupabase, unwrap } = require('./supabase');
+const stateStore = require('./stateStore');
 
 /**
  * Durable replacement for the in-memory userHalls / userCarts objects.
@@ -43,6 +44,21 @@ function toCart(row) {
   };
 }
 
+/**
+ * Every cart change is read-modify-write on one row, and each Telegram tap is a
+ * separate serverless invocation, so rapid taps run in parallel and the last
+ * writer wins - dropping the others' items. Serialising per customer fixes that
+ * without slowing anyone else down.
+ */
+function withCartLock(telegramUserId, task) {
+  return stateStore.withLock(stateStore.LOCKS.cart(telegramUserId), task, {
+    leaseMs: 10000,
+    maxAttempts: 30,
+    baseDelayMs: 50,
+    maxDelayMs: 400,
+  });
+}
+
 async function getCart(telegramUserId) {
   const supabase = getSupabase();
 
@@ -79,29 +95,31 @@ async function saveCart(telegramUserId, cart) {
 }
 
 async function setHall(telegramUserId, hall) {
-  return saveCart(telegramUserId, {
+  return withCartLock(telegramUserId, () => saveCart(telegramUserId, {
     hallSheetRowId: hall.id,
     hallName: hall.name,
     items: {},
-  });
+  }));
 }
 
 /**
  * Add one of an item, recording the name it had at the time.
  */
 async function addItem(telegramUserId, foodRowId, name, quantity = 1) {
-  const cart = await getCart(telegramUserId);
-  const key = String(foodRowId);
-  const existing = cart.items[key];
+  return withCartLock(telegramUserId, async () => {
+    const cart = await getCart(telegramUserId);
+    const key = String(foodRowId);
+    const existing = cart.items[key];
 
-  cart.items[key] = {
-    quantity: (existing ? existing.quantity : 0) + quantity,
-    // Always the latest reading, so the snapshot matches what the customer was
-    // actually shown on the screen they tapped.
-    name,
-  };
+    cart.items[key] = {
+      quantity: (existing ? existing.quantity : 0) + quantity,
+      // Always the latest reading, so the snapshot matches what the customer was
+      // actually shown on the screen they tapped.
+      name,
+    };
 
-  return saveCart(telegramUserId, cart);
+    return saveCart(telegramUserId, cart);
+  });
 }
 
 /** Quantity of one item currently in the cart. */
@@ -111,9 +129,11 @@ function getQuantity(cart, foodRowId) {
 }
 
 async function clearItems(telegramUserId) {
-  const cart = await getCart(telegramUserId);
-  cart.items = {};
-  return saveCart(telegramUserId, cart);
+  return withCartLock(telegramUserId, async () => {
+    const cart = await getCart(telegramUserId);
+    cart.items = {};
+    return saveCart(telegramUserId, cart);
+  });
 }
 
 /**
@@ -141,10 +161,12 @@ async function getCartsForHall(hallName) {
 async function clearCart(telegramUserId) {
   const supabase = getSupabase();
 
-  unwrap(
-    await supabase.from('carts').delete().eq('telegram_user_id', telegramUserId),
-    'cartStore.clearCart'
-  );
+  await withCartLock(telegramUserId, async () => {
+    unwrap(
+      await supabase.from('carts').delete().eq('telegram_user_id', telegramUserId),
+      'cartStore.clearCart'
+    );
+  });
 }
 
 /** Entries with a positive quantity, as { foodId, quantity, name }. */
@@ -205,3 +227,4 @@ module.exports = {
   isEmpty,
   findCartMismatch,
 };
+
