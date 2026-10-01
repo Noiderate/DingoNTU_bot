@@ -54,32 +54,74 @@ async function isOrderingOpen() {
 
 /**
  * Staff at a hall need a way to identify a customer that survives them
- * closing the app - a Telegram handle doesn't. Collected once, the first
- * time (or the first time since this shipped) a customer confirms an order.
+ * closing the app - a Telegram handle doesn't. Collected once, on a
+ * customer's first /start, with a second check at Confirm Order as a backstop
+ * for carts that were already open before they had a number on file.
  *
  * Kept permissive rather than Singapore-only: NTU has a lot of international
  * students, and rejecting a real foreign number would just block an order for
  * no benefit. Strips everything but digits and accepts a plausible length.
+ *
+ * A Singapore number's 65 country code is dropped, so a typed "91234567" and a
+ * shared contact's "6591234567" (Telegram always sends the full international
+ * form) are stored the same way.
  */
 function normalizePhoneNumber(text) {
-  const digits = String(text || '').replace(/\D/g, '');
+  let digits = String(text || '').replace(/\D/g, '');
+
+  if (digits.length === 10 && digits.startsWith('65')) {
+    digits = digits.slice(2);
+  }
+
   return digits.length >= 7 && digits.length <= 15 ? digits : null;
 }
 
-async function requestPhoneNumber(bot, chatId, userId) {
-  await stateStore.set(stateStore.KEYS.awaitingPhoneNumber(userId), true, { ttlMs: 30 * 60 * 1000 });
+// A reply keyboard button that sends the customer's own number in one tap.
+const SHARE_PHONE_KEYBOARD = {
+  keyboard: [[{ text: '📱 Share phone number', request_contact: true }]],
+  resize_keyboard: true,
+  one_time_keyboard: true,
+};
 
-  await bot.sendMessage(
-    chatId,
-    '📱 Before we can confirm your order, we need a contact number so staff can reach you at the hall.\n\n'
-    + 'Please reply with your phone number (e.g. 91234567), then tap ✅ Confirm Order again.'
-  );
+// Where the phone-number prompt was raised, which decides what happens once
+// the number is saved. Stored as the awaitingPhoneNumber state's value.
+const PHONE_PROMPT = {
+  // From /start: carry straight on to the hall menu.
+  START: 'start',
+  // From Confirm Order: the customer taps Confirm again. A legacy `true`
+  // state value is treated the same way.
+  CONFIRM: 'confirm',
+};
+
+async function requestPhoneNumber(bot, chatId, userId, prompt = PHONE_PROMPT.CONFIRM) {
+  await stateStore.set(stateStore.KEYS.awaitingPhoneNumber(userId), prompt, { ttlMs: 30 * 60 * 1000 });
+
+  const text = prompt === PHONE_PROMPT.START
+    ? '👋 Welcome! Before you order, we need a contact number so staff can reach you at the hall.\n\n'
+      + 'Tap 📱 Share phone number below, or type your number (e.g. 91234567).'
+    : '📱 Before we can confirm your order, we need a contact number so staff can reach you at the hall.\n\n'
+      + 'Tap 📱 Share phone number below, or type your number (e.g. 91234567). '
+      + 'Then tap ✅ Confirm Order again.';
+
+  await bot.sendMessage(chatId, text, { reply_markup: SHARE_PHONE_KEYBOARD });
 }
 
-async function handlePhoneNumberReply(bot, msg) {
+/** Handles both a typed number and a contact shared via the button. */
+async function handlePhoneNumberReply(bot, msg, prompt = PHONE_PROMPT.CONFIRM) {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  const phoneNumber = normalizePhoneNumber(msg.text);
+
+  // The button only ever sends the customer's own contact, but any saved
+  // contact can also be sent from the attachment menu - refuse those.
+  if (msg.contact && msg.contact.user_id !== userId) {
+    await bot.sendMessage(
+      chatId,
+      '❌ Please share your own number using the 📱 Share phone number button, or type it in.'
+    );
+    return true;
+  }
+
+  const phoneNumber = normalizePhoneNumber(msg.contact ? msg.contact.phone_number : msg.text);
 
   if (!phoneNumber) {
     await bot.sendMessage(
@@ -112,7 +154,18 @@ async function handlePhoneNumberReply(bot, msg) {
   }
 
   await stateStore.remove(stateStore.KEYS.awaitingPhoneNumber(userId));
-  await bot.sendMessage(chatId, '✅ Thanks! Now tap ✅ Confirm Order again to complete your order.');
+
+  if (prompt === PHONE_PROMPT.START) {
+    await bot.sendMessage(chatId, '✅ Thanks, your number is saved!', {
+      reply_markup: { remove_keyboard: true },
+    });
+    await sendHallMenu(bot, chatId, userId);
+    return true;
+  }
+
+  await bot.sendMessage(chatId, '✅ Thanks! Now tap ✅ Confirm Order again to complete your order.', {
+    reply_markup: { remove_keyboard: true },
+  });
   return true;
 }
 
@@ -241,10 +294,81 @@ async function handleUserCallback(bot, query) {
   }
 }
 
+// Telegram won't let a bot delete its messages after 48 hours, so there is no
+// point remembering a menu for longer than that.
+const MENU_MESSAGE_TTL_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * Only one /start menu per customer: a repeat /start deletes the previous one
+ * so they can start over without stale menus piling up. Best-effort - the menu
+ * is usually already gone (deleted on Confirm Order), which is fine.
+ */
+async function deletePreviousMenu(bot, userId) {
+  const key = stateStore.KEYS.userMenuMessage(userId);
+  const previous = await stateStore.get(key);
+
+  if (!previous) {
+    return;
+  }
+
+  await stateStore.remove(key);
+
+  try {
+    await bot.deleteMessage(previous.chatId, previous.messageId);
+  } catch (error) {
+    log('info', 'delete_previous_menu_skipped', { error: error.message });
+  }
+}
+
+/** The "select your hall" menu, remembered so a repeat /start can delete it. */
+async function sendHallMenu(bot, chatId, userId) {
+  // Re-checked because a phone-number reply can arrive well after /start.
+  if (!await isOrderingOpen()) {
+    await bot.sendMessage(chatId, ORDERING_NOT_OPEN_TEXT);
+    return;
+  }
+
+  const blocked = await orderStore.loadBlockedHalls();
+  const halls = (await googleSheets.getHallsOrThrow()).filter(hall => !blocked.isBlocked(hall.name));
+
+  if (halls.length === 0) {
+    await bot.sendMessage(chatId, 'No halls available for ordering right now. Please contact an admin.');
+    return;
+  }
+
+  const menuMessage = await bot.sendMessage(
+    chatId,
+    '🏢 Welcome! Please select your hall:\n\n'
+    + 'Note: If your usual pickup location is not listed, ordering for that hall has already closed.',
+    {
+      reply_markup: {
+        inline_keyboard: halls.map(hall => [{
+          text: hall.name,
+          callback_data: `${USER_CALLBACKS.SELECT_HALL_PREFIX}${hall.id}:${createCallbackItemToken(hall.name)}`,
+        }]),
+      },
+    }
+  );
+
+  if (menuMessage && menuMessage.message_id) {
+    await stateStore.set(
+      stateStore.KEYS.userMenuMessage(userId),
+      { chatId, messageId: menuMessage.message_id },
+      { ttlMs: MENU_MESSAGE_TTL_MS }
+    );
+  }
+}
+
 async function routeUserCommand(bot, msg) {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const text = msg.text;
+
+  // A contact shared via the 📱 Share phone number button has no text.
+  if (msg.contact) {
+    const prompt = await stateStore.get(stateStore.KEYS.awaitingPhoneNumber(userId));
+    return prompt ? handlePhoneNumberReply(bot, msg, prompt) : false;
+  }
 
   if (!text) {
     return false;
@@ -255,40 +379,34 @@ async function routeUserCommand(bot, msg) {
   // swallowed as a (garbage) phone number attempt.
   const isCommand = text.startsWith('/');
 
-  if (!isCommand && await stateStore.get(stateStore.KEYS.awaitingPhoneNumber(userId))) {
-    return handlePhoneNumberReply(bot, msg);
+  if (!isCommand) {
+    const prompt = await stateStore.get(stateStore.KEYS.awaitingPhoneNumber(userId));
+
+    if (prompt) {
+      return handlePhoneNumberReply(bot, msg, prompt);
+    }
   }
 
   // Handles the /start order deep link from the channel post too.
   if (text === '/start' || text.startsWith('/start ')) {
     await cartStore.clearCart(userId);
+    await deletePreviousMenu(bot, userId);
 
     if (!await isOrderingOpen()) {
       await bot.sendMessage(chatId, ORDERING_NOT_OPEN_TEXT);
       return true;
     }
 
-    const blocked = await orderStore.loadBlockedHalls();
-    const halls = (await googleSheets.getHallsOrThrow()).filter(hall => !blocked.isBlocked(hall.name));
+    // First-timers give a contact number before seeing the halls; saving it
+    // carries them straight on to the hall menu.
+    const customer = await repo.getCustomerByTelegramId(userId);
 
-    if (halls.length === 0) {
-      await bot.sendMessage(chatId, 'No halls available for ordering right now. Please contact an admin.');
+    if (!customer || !customer.phone_number) {
+      await requestPhoneNumber(bot, chatId, userId, PHONE_PROMPT.START);
       return true;
     }
 
-    await bot.sendMessage(
-      chatId,
-      '🏢 Welcome! Please select your hall:\n\n'
-      + 'Note: If your usual pickup location is not listed, ordering for that hall has already closed.',
-      {
-        reply_markup: {
-          inline_keyboard: halls.map(hall => [{
-            text: hall.name,
-            callback_data: `${USER_CALLBACKS.SELECT_HALL_PREFIX}${hall.id}:${createCallbackItemToken(hall.name)}`,
-          }]),
-        },
-      }
-    );
+    await sendHallMenu(bot, chatId, userId);
     return true;
   }
 

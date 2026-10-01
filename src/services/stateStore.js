@@ -19,6 +19,9 @@ const KEYS = {
   // this was collected). The next plain-text message from them is read as
   // their reply rather than falling through to the fallback hint.
   awaitingPhoneNumber: userId => `user:awaiting_phone:${userId}`,
+  // The customer's current /start menu ({ chatId, messageId }), so a repeat
+  // /start can delete it and leave only one open menu.
+  userMenuMessage: userId => `user:menu_msg:${userId}`,
   // Set while an admin has been asked for a drop-off photo for one customer's
   // remaining order(s) at a hall. The next photo/image document they send is
   // relayed to that customer instead of being treated as a payment receipt.

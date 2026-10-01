@@ -40,6 +40,7 @@ test('/start while Sheets is down asks the customer to retry instead of "No hall
   ));
   t.mock.method(orderStore, 'loadBlockedHalls', async () => ({ isBlocked: () => false }));
   t.mock.method(googleSheets, 'getHallsOrThrow', async () => { throw sheetsDown(); });
+  t.mock.method(repo, 'getCustomerByTelegramId', async () => ({ id: 'c1', phone_number: '91234567' }));
 
   const sent = [];
   const bot = { async sendMessage(chatId, text) { sent.push(text); } };
