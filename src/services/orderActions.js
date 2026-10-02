@@ -220,8 +220,7 @@ async function closeLeftoverOrder(bot, order) {
     fromStatus: order.status,
     actor: 'system',
     reason: 'Delivery round reset',
-    customerMessage: `❌ Order ${order.code} was closed because the delivery round ended before payment was completed.\n\n`
-      + `The items have been returned to stock. If you still want to order, please create a new order by typing /start.`,
+    customerMessage: `❌ Order ${order.code} closed, the delivery round ended before payment. /start to reorder.`,
   });
 
   return result.success ? result.order : null;
@@ -272,9 +271,8 @@ async function expireOrder(bot, order) {
 
 /** Also sent again if the customer sends a screenshot after the fact. */
 function expiredOrderMessage(orderCode) {
-  return `⌛ Order ${orderCode} has expired because a payment receipt was not received in time.\n\n`
-    + `The items have been returned to stock. Please create your order again by typing /start.\n\n`
-    + `If you have already made payment, recreate the same order and submit the screenshot of that payment. You do not need to pay again.`;
+  return `⌛ Order ${orderCode} expired (no receipt in time). /start to reorder.\n\n`
+    + 'Already paid? Place the same order and send that screenshot, no need to pay again.';
 }
 
 /** Shared summary block used in customer and admin messages. */

@@ -181,6 +181,12 @@ backlog: `node scripts/set-webhook.js set --drop-pending`.
 workers stop and release jobs *before* that. If you raise one, raise both, and
 keep the budget at least 60s below the duration.
 
+Scheduled runs (`/api/cron/*`) use a separate, much shorter budget:
+`CRON_TIME_BUDGET_MS` (15s). cron-job.org abandons a request after 30s and
+disables a job after 25 failures in a row, so a tick has to hand back well
+inside that. Whatever it did not reach is picked up by the next tick. Check the
+job is still enabled in cron-job.org if orders stop expiring.
+
 **Env vars changed but nothing happened**
 
 Vercel injects environment variables at **build** time. Changing one in the
@@ -865,7 +871,12 @@ order history.
 
 **PDPA and retention.** Receipts contain names, bank details and phone numbers.
 Suggested policy: keep payment evidence 12 months for disputes and accounting,
-then delete. The bot currently deletes receipt **images** 30 days after upload
+then delete. **By default the bot does not store receipt images at all**
+(`STORE_RECEIPT_IMAGES` is off): the receipt stays on Telegram, referenced by
+`telegram_file_id`, which is also how admins are shown it, and only its
+`image_sha256` is kept for the replay guard. Set `STORE_RECEIPT_IMAGES=true` to
+also keep a copy in the bucket for disputes; the rest of this paragraph applies
+to those copies. They are deleted 30 days after upload
 (`RECEIPT_RETENTION_DAYS`, `0` keeps them forever) to stay inside the free
 1 GB storage limit. This runs in the minute-by-minute sweep and only touches
 orders that are finished (paid, served, rejected, cancelled, expired) — never a

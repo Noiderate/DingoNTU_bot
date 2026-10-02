@@ -46,8 +46,8 @@ test('a screenshot for an order that just expired gets the expiry explanation ag
 
   assert.equal(handled, true);
   assert.equal(bot.messages.length, 1);
-  assert.match(bot.messages[0].text, /DG7 has expired/);
-  assert.match(bot.messages[0].text, /do not need to pay again/i);
+  assert.match(bot.messages[0].text, /DG7 expired/);
+  assert.match(bot.messages[0].text, /no need to pay again/i);
 });
 
 test('a screenshot for an already-paid order says nothing more is needed', async t => {

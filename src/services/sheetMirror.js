@@ -1,4 +1,4 @@
-const { readFromSheet, readFromSheetOrThrow, writeToSheet, appendToSheet } = require('./googleSheets');
+const { readFromSheetOrThrow, writeToSheet, appendToSheet } = require('./googleSheets');
 const { getSupabase, unwrap } = require('./supabase');
 const { getOrderById } = require('./orderRepository');
 const { formatSgt } = require('../utils/time');
@@ -89,6 +89,9 @@ function paymentStatusFor(order) {
 // against the sheet before it is used and discarded when it does not match.
 let rowCache = new Map();
 
+// When this instance last confirmed the Orders header row (see ensureHeaders).
+const HEADERS_CHECK_TTL_MS = 10 * 60 * 1000;
+let headersCheckedAt = 0;
 
 /**
  * Create headers, or extend an existing sheet with the new right-hand columns.
@@ -97,22 +100,38 @@ let rowCache = new Map();
  * headers: those are left untouched and only L:R are added.
  */
 async function ensureHeaders() {
-  const existing = (await readFromSheet(`${SHEET}!A1:${LAST_COLUMN}1`))[0] || [];
-
-  if (existing.length === 0) {
-    await writeToSheet(`${SHEET}!A1:${LAST_COLUMN}1`, [HEADERS]);
-    log('info', 'sheet_headers_created', { columns: HEADERS.length });
+  // The header row all but never changes, but this ran before every row write
+  // and cost a Sheets read each time. Once per warm instance per TTL is plenty,
+  // and still repairs a header row a person deleted.
+  if (Date.now() - headersCheckedAt < HEADERS_CHECK_TTL_MS) {
     return;
   }
 
-  if (existing.length < HEADERS.length) {
+  // Throws on a failed read rather than treating it as "no headers": that would
+  // overwrite a real header row with the defaults during a Sheets blip.
+  const existing = (await readFromSheetOrThrow(`${SHEET}!A1:${LAST_COLUMN}1`))[0] || [];
+  let written = true;
+
+  if (existing.length === 0) {
+    written = await writeToSheet(`${SHEET}!A1:${LAST_COLUMN}1`, [HEADERS]);
+    log('info', 'sheet_headers_created', { columns: HEADERS.length });
+  } else if (existing.length < HEADERS.length) {
     const startColumn = String.fromCharCode('A'.charCodeAt(0) + existing.length);
-    await writeToSheet(
+    written = await writeToSheet(
       `${SHEET}!${startColumn}1:${LAST_COLUMN}1`,
       [HEADERS.slice(existing.length)]
     );
     log('info', 'sheet_headers_extended', { added: HEADERS.length - existing.length });
   }
+
+  // A failed write (writeToSheet returns false) is checked again next time.
+  if (written) {
+    headersCheckedAt = Date.now();
+  }
+}
+
+function resetHeadersCheck() {
+  headersCheckedAt = 0;
 }
 
 /** Latest payment submission for an order, used for the verification columns. */
@@ -369,7 +388,14 @@ async function drainOutbox({ limit = 20, deadline = Date.now() + 30000, workerId
 /**
  * Re-queue orders whose sheet row is behind the database.
  *
- * Catches anything lost to a crash between the DB commit and the outbox write.
+ * Catches anything lost to a crash between the DB commit and the outbox write,
+ * so it only adds a queue entry where one is MISSING. An order that is already
+ * queued keeps its own schedule: overwriting it made a failing order retry every
+ * minute, skipping the backoff that exists to give an overloaded Sheets API room.
+ * (An order that has run out of attempts stays queued and is retried at the
+ * backoff cap, every 5 minutes.)
+ *
+ * Returns how many entries were actually added.
  */
 async function reconcile(limit = 50) {
   const supabase = getSupabase();
@@ -384,14 +410,29 @@ async function reconcile(limit = 50) {
     'sheetMirror.reconcile'
   );
 
-  for (const order of stale) {
-    await supabase.from('sheet_sync_outbox').upsert(
-      { order_id: order.id, next_attempt_at: new Date().toISOString() },
-      { onConflict: 'order_id' }
-    );
+  if (stale.length === 0) {
+    return { requeued: 0 };
   }
 
-  return { requeued: stale.length };
+  const nowIso = new Date().toISOString();
+
+  // One statement for the whole batch; ignoreDuplicates leaves existing entries
+  // untouched and only returns the rows it actually inserted.
+  const added = await supabase
+    .from('sheet_sync_outbox')
+    .upsert(
+      stale.map(order => ({ order_id: order.id, next_attempt_at: nowIso })),
+      { onConflict: 'order_id', ignoreDuplicates: true }
+    )
+    .select('order_id');
+
+  if (added.error) {
+    // Best-effort, like the per-row upserts it replaces: the next tick tries again.
+    log('warn', 'reconcile_enqueue_failed', { error: added.error.message });
+    return { requeued: 0 };
+  }
+
+  return { requeued: added.data.length };
 }
 
 function clearRowCache() {
@@ -404,6 +445,7 @@ module.exports = {
   PAYMENT_STATUS,
   paymentStatusFor,
   ensureHeaders,
+  resetHeadersCheck,
   buildRow,
   findRowByOrderCode,
   syncOrder,

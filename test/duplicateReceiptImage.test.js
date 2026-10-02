@@ -174,3 +174,74 @@ test('a repeat screenshot already on file is rejected before anything is uploade
   assert.equal(result.outcome, 'duplicate_rejected');
   assert.equal(patches.at(-1).storage_path, null);
 });
+
+
+// --- Receipt images are only stored when STORE_RECEIPT_IMAGES is on ------------
+
+/**
+ * Drives processSubmission far enough to capture the evidence write, then stops
+ * it with a unique violation (resolved as a duplicate) so no Gemini call is needed.
+ */
+async function captureEvidenceWrite(t) {
+  const orderRow = {
+    id: 'order-1', order_code: 'DG1', status: STATUS.VERIFYING_PAYMENT, telegram_chat_id: 555,
+    total_cents: 500, order_items: [], customers: {},
+  };
+  const submission = {
+    id: 'sub-4', order_id: 'order-1', storage_path: null, image_sha256: null,
+    received_at: new Date().toISOString(), attempt_count: 0, processing_message_id: 42,
+  };
+
+  t.mock.method(repo, 'getPaymentSubmission', async () => submission);
+  t.mock.method(repo, 'claimSubmissionById', async () => submission);
+  t.mock.method(repo, 'getOrderById', async () => orderRow);
+  t.mock.method(repo, 'buildReceiptPath', () => '2026/09/DG1/sub-4.jpg');
+
+  const uploads = [];
+  t.mock.method(repo, 'uploadReceipt', async upload => { uploads.push(upload); });
+
+  const patches = [];
+  t.mock.method(repo, 'updatePaymentSubmission', async (id, patch) => {
+    patches.push(patch);
+    if (patches.length === 1) {
+      throw uniqueViolationError();
+    }
+    return { id, ...patch };
+  });
+
+  let lookups = 0;
+  t.mock.method(repo, 'findConflictingSubmission', async () => {
+    lookups += 1;
+    return lookups === 1 ? null : { id: 'winning-submission' };
+  });
+  t.mock.method(repo, 'transitionOrderStatus', async () => ({ id: 'order-1', status: STATUS.AWAITING_PAYMENT }));
+  t.mock.method(orderActions, 'notify', async () => true);
+
+  const bot = { async getFileLink() { return 'https://example.com/file.jpg'; } };
+  t.mock.method(globalThis, 'fetch', async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }));
+
+  await processSubmission(bot, 'sub-4', { alreadyClaimed: true });
+
+  return { uploads, evidence: patches[0] };
+}
+
+test('by default the receipt image is not uploaded, only its hash is recorded', async t => {
+  const { uploads, evidence } = await captureEvidenceWrite(t);
+
+  assert.equal(uploads.length, 0);
+  assert.ok(evidence.image_sha256, 'the replay-guard hash must still be recorded');
+  assert.ok(!('storage_path' in evidence), 'no storage_path when nothing was stored');
+});
+
+test('with STORE_RECEIPT_IMAGES on, the image is uploaded and its path recorded', async t => {
+  const { config } = require('../src/config');
+  const original = config.supabase.storeReceiptImages;
+  config.supabase.storeReceiptImages = true;
+  t.after(() => { config.supabase.storeReceiptImages = original; });
+
+  const { uploads, evidence } = await captureEvidenceWrite(t);
+
+  assert.equal(uploads.length, 1);
+  assert.equal(evidence.storage_path, '2026/09/DG1/sub-4.jpg');
+  assert.ok(evidence.image_sha256);
+});

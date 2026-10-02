@@ -3,6 +3,7 @@ const { waitUntil } = require('@vercel/functions');
 const { handleUpdate } = require('../src/app');
 const { getSupabase, unwrap, isUniqueViolation } = require('../src/services/supabase');
 const { drainOutbox } = require('../src/services/sheetMirror');
+const { getSheetSyncEnqueueCount } = require('../src/services/orderRepository');
 const { config } = require('../src/config');
 const { log } = require('../src/utils/logger');
 
@@ -121,6 +122,7 @@ async function handler(req, res) {
   }
 
   try {
+    const enqueuedBefore = getSheetSyncEnqueueCount();
     const { deferred } = await handleUpdate(update);
 
     // Slow follow-up work runs after the response so Telegram is not kept
@@ -132,10 +134,15 @@ async function handler(req, res) {
       }));
     }
 
-    waitUntil(
-      drainOutbox({ deadline: Date.now() + 20000, workerId: `webhook-${updateId}` })
-        .catch(error => log('error', 'inline_outbox_drain_failed', { error: error.message }))
-    );
+    // Only when this update queued an order change: a menu tap or a hall
+    // browse has nothing to push, and the scheduled tick still drains anything
+    // else (retries, work queued by deferred tasks).
+    if (getSheetSyncEnqueueCount() !== enqueuedBefore) {
+      waitUntil(
+        drainOutbox({ deadline: Date.now() + 20000, workerId: `webhook-${updateId}` })
+          .catch(error => log('error', 'inline_outbox_drain_failed', { error: error.message }))
+      );
+    }
 
     res.status(200).json({ ok: true });
   } catch (error) {

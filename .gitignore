@@ -64,3 +64,8 @@ tmp/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Remotion agent skills (installed locally, not part of the bot)
+.claude/skills/remotion-*/
+skills-lock.json
+demo-video/

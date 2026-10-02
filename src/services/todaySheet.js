@@ -1,10 +1,6 @@
+const crypto = require('crypto');
 const { DateTime } = require('luxon');
-const {
-  writeToSheet,
-  clearRange,
-  ensureSheetTab,
-  batchUpdateSpreadsheet,
-} = require('./googleSheets');
+const googleSheets = require('./googleSheets');
 const { getSupabase, unwrap } = require('./supabase');
 const stateStore = require('./stateStore');
 const { STATUS_LABELS, paymentStatusFor } = require('./sheetMirror');
@@ -38,6 +34,10 @@ const EXCLUDED_FROM_TOTALS = new Set(['rejected', 'cancelled', 'expired']);
 
 // The tab is rewritten at most once per this interval, across all instances.
 const REFRESH_MIN_INTERVAL_MS = 20 * 1000;
+
+// An unchanged tab is still rewritten this often, so a cleared or edited tab
+// heals itself instead of staying wrong until the next order.
+const FORCE_REWRITE_MS = 10 * 60 * 1000;
 
 // Best-effort, per-instance cache so a busy period doesn't re-fetch
 // spreadsheet metadata on every single order change.
@@ -154,7 +154,11 @@ async function applyFormatting(sheetId, { totalsHeaderRowIndex, totalsColumnHead
     boldRange(totalsColumnHeaderRowIndex, totalsColumnHeaderRowIndex + 1), // "Item" / "Qty"
   ];
 
-  await batchUpdateSpreadsheet(requests);
+  await googleSheets.batchUpdateSpreadsheet(requests);
+}
+
+function hashRows(rows) {
+  return crypto.createHash('sha256').update(JSON.stringify(rows)).digest('hex');
 }
 
 /**
@@ -183,10 +187,6 @@ async function refreshTodaySheet() {
     return { throttled: true };
   }
 
-  if (!cachedSheetId) {
-    cachedSheetId = await ensureSheetTab(SHEET_TITLE);
-  }
-
   const orders = await getTodaysOrders();
   const totals = buildItemTotals(orders);
 
@@ -199,10 +199,31 @@ async function refreshTodaySheet() {
   rows.push(['Item', 'Qty']);
   totals.forEach(([name, qty]) => rows.push([name, qty]));
 
+  // The tick calls this every minute, and most minutes nothing has changed. The
+  // service-day rollover needs no special case: the order list changes then, so
+  // the hash does too.
+  const hash = hashRows(rows);
+  const last = await stateStore.get(stateStore.KEYS.todaySheetSync(), null);
+
+  if (last && last.hash === hash && Date.now() - last.writtenAt < FORCE_REWRITE_MS) {
+    return { skipped: 'unchanged', orders: orders.length, items: totals.length };
+  }
+
+  if (!cachedSheetId) {
+    cachedSheetId = await googleSheets.ensureSheetTab(SHEET_TITLE);
+  }
+
   // Clear first so a shorter day doesn't leave a longer day's rows dangling
   // underneath the new content.
-  await clearRange(`${QUOTED_SHEET}!A1:H1000`);
-  await writeToSheet(`${QUOTED_SHEET}!A1`, rows);
+  const cleared = await googleSheets.clearRange(`${QUOTED_SHEET}!A1:H1000`);
+  const written = await googleSheets.writeToSheet(`${QUOTED_SHEET}!A1`, rows);
+
+  // Both helpers return false rather than throw. A failed write must not be
+  // recorded as done, or the tab would stay wrong until something changed.
+  if (!cleared || !written) {
+    log('warn', 'today_sheet_write_failed', { cleared, written });
+    return { written: false };
+  }
 
   try {
     await applyFormatting(cachedSheetId, { totalsHeaderRowIndex, totalsColumnHeaderRowIndex });
@@ -210,6 +231,8 @@ async function refreshTodaySheet() {
     // Cosmetic only - the data write above already succeeded.
     log('warn', 'today_sheet_formatting_failed', { error: error.message });
   }
+
+  await stateStore.set(stateStore.KEYS.todaySheetSync(), { hash, writtenAt: Date.now() });
 
   return { orders: orders.length, items: totals.length };
 }

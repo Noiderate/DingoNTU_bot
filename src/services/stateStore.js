@@ -57,6 +57,9 @@ const KEYS = {
   // What was last written to the FoodAndStock sheet mirror, { hash, rowCount },
   // so an unchanged menu costs no Sheets write (see menuSheetSync).
   menuSheetSync: () => 'menu:sheet_sync',
+  // What was last written to the Today's Orders tab, { hash, writtenAt }, so an
+  // unchanged day costs no Sheets write (see todaySheet).
+  todaySheetSync: () => 'sheet:today_sync',
   // Running tally of "sold out" moments for the Stats tab: { total, items: { name: count } }.
   soldOutStats: () => 'stats:sold_out',
   // Cached t.me deep link and payment-image file_id, to avoid repeat API calls.

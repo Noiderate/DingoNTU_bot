@@ -63,12 +63,13 @@ async function runDrainSheetOutbox(deadline) {
 }
 
 /**
- * Rebuild the Today's Orders tab even when nothing drained this tick.
+ * Refresh the Today's Orders tab even when nothing drained this tick.
  *
  * drainOutbox already refreshes it after a real order change, which covers
- * the "live" case within seconds. This unconditional, once-a-minute call is
- * what flips the tab over at midnight (a quiet night has nothing to drain)
- * and catches anything the drain-triggered refresh missed.
+ * the "live" case within seconds. This once-a-minute call is what flips the tab
+ * over at the service-day rollover (a quiet night has nothing to drain) and
+ * catches anything the drain-triggered refresh missed. It only writes to the
+ * sheet when the content changed (see todaySheet), so a quiet minute is cheap.
  */
 async function runRefreshTodaySheet() {
   return refreshTodaySheet();
@@ -197,7 +198,7 @@ async function runSweep() {
  *
  * Each job is isolated so one failure does not prevent the rest from running.
  */
-async function runTick({ deadline = Date.now() + config.worker.timeBudgetMs } = {}) {
+async function runTick({ deadline = Date.now() + config.worker.cronTimeBudgetMs } = {}) {
   const results = {};
 
   const jobs = [
@@ -233,7 +234,7 @@ function createCronHandler(name, job) {
     }
 
     const startedAt = Date.now();
-    const deadline = startedAt + config.worker.timeBudgetMs;
+    const deadline = startedAt + config.worker.cronTimeBudgetMs;
 
     try {
       const result = await job({ deadline });

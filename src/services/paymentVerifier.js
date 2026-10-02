@@ -30,12 +30,12 @@ const STATUS = repo.STATUS;
 const MESSAGES = {
   PROCESSING: 'Please wait while your payment is being processed.',
   SLOW: 'This is taking longer than expected, please wait',
-  FLAGGED: "We couldn't automatically verify your payment. An admin will review it shortly. No need to resend unless asked.",
+  FLAGGED: 'This is taking much longer than expected ⏳',
   DUPLICATE: "This receipt has already been used for another order. Please send the screenshot for this order's payment.",
   INCOMPLETE: '⚠️ That looks like an unfinished or scheduled transfer, not a completed one.\n\n'
     + 'Please complete the payment and send the screenshot of the "Transfer Successful" screen.',
   ALREADY_VERIFIED: '✅ This payment has already been verified. Nothing more is needed.',
-  ALREADY_UNDER_REVIEW: 'This receipt is already under review. Please wait for an admin.',
+  ALREADY_UNDER_REVIEW: 'This receipt is already under review, please hold ⏳',
   STILL_CHECKING: 'Your previous screenshot is still being checked, please wait.',
 };
 
@@ -567,7 +567,9 @@ async function processSubmission(bot, submissionId, {
     const imageBuffer = await downloadTelegramFile(bot, submission.telegram_file_id);
     const mimeType = detectImageMimeType(imageBuffer);
 
-    if (!submission.storage_path) {
+    // image_sha256 marks the evidence step as done. storage_path cannot, since it
+    // stays null when receipt images are not stored.
+    if (!submission.image_sha256) {
       const sha256 = crypto.createHash('sha256').update(imageBuffer).digest('hex');
 
       // An exact repeat of an image that is already claimed is rejected here,
@@ -579,24 +581,26 @@ async function processSubmission(bot, submissionId, {
         return await handleDuplicateImage(bot, { order, submission, storagePath: null, sha256 });
       }
 
-      // Only the stored copy is shrunk; Gemini below still reads the original.
-      const stored = await shrinkForStorage(imageBuffer);
-      const storedBuffer = stored ? stored.buffer : imageBuffer;
-      const storedMimeType = stored ? stored.mimeType : mimeType;
+      const evidence = { image_sha256: sha256 };
 
-      const storagePath = repo.buildReceiptPath({
-        orderCode: order.code,
-        submissionId: submission.id,
-        extension: stored ? stored.extension : extensionFor(mimeType),
-      });
+      if (config.supabase.storeReceiptImages) {
+        // Only the stored copy is shrunk; Gemini below still reads the original.
+        const stored = await shrinkForStorage(imageBuffer);
+        const storedBuffer = stored ? stored.buffer : imageBuffer;
+        const storedMimeType = stored ? stored.mimeType : mimeType;
 
-      await repo.uploadReceipt({ path: storagePath, buffer: storedBuffer, contentType: storedMimeType });
+        const storagePath = repo.buildReceiptPath({
+          orderCode: order.code,
+          submissionId: submission.id,
+          extension: stored ? stored.extension : extensionFor(mimeType),
+        });
+
+        await repo.uploadReceipt({ path: storagePath, buffer: storedBuffer, contentType: storedMimeType });
+        evidence.storage_path = storagePath;
+      }
 
       try {
-        submission = await repo.updatePaymentSubmission(submission.id, {
-          storage_path: storagePath,
-          image_sha256: sha256,
-        });
+        submission = await repo.updatePaymentSubmission(submission.id, evidence);
       } catch (error) {
         if (!isUniqueViolation(error)) {
           throw error;
@@ -608,7 +612,9 @@ async function processSubmission(bot, submissionId, {
         // repeat screenshot is reported as a duplicate instead of falling
         // through to handleTerminalFailure below and being mislabeled as a
         // Gemini verification failure.
-        return await handleDuplicateImage(bot, { order, submission, storagePath, sha256 });
+        return await handleDuplicateImage(bot, {
+          order, submission, storagePath: evidence.storage_path || null, sha256,
+        });
       }
     }
 

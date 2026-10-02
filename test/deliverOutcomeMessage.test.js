@@ -66,5 +66,5 @@ test('FLAGGED deletes the processing message and sends the result as a new one',
 
   assert.equal(bot.calls.deleted.length, 1);
   assert.equal(bot.calls.sent.length, 1);
-  assert.match(bot.calls.sent[0].text, /couldn't automatically verify/i);
+  assert.match(bot.calls.sent[0].text, /taking much longer than expected/i);
 });

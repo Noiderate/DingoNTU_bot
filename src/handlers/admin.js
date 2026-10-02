@@ -1219,15 +1219,20 @@ async function handleOrderConfirm(bot, query, chatId, userId, messageId, data) {
  * resulting file_id is cached, so later sends skip the upload entirely and no
  * longer depend on the file being bundled into the deployment.
  */
+// Swapped out by sendPaymentInstructions when no QR image could be sent at all.
+const PAY_WITH_QR_LINE = '1️⃣ Pay with the PayNow QR above';
+const NO_QR_LINE = '1️⃣ QR unavailable - please contact an admin for payment details';
+
 function buildPaymentCaption(order) {
-  const heading = `✅ Order ${order.code} placed\n🏢 Hall: ${order.hallName}\n\n`;
-  const instructions = `\n\n💰 Amount due: ${formatCents(order.totalCents)}\n\n`
-    + 'Please use PayNow to pay using the QR above.\n\n'
-    + 'Send an UNCROPPED screenshot of the completed transfer for automatic verification. You can send it as a photo or file.\n\n'
-    + 'MUST INCLUDE DATE, TIME AND PAYMENT AMOUNT AND TO WHO\n\n'
-    + '📸 Swipe for an example of a valid screenshot.\n\n'
-    + (config.payment.expiryEnabled ? `⚠️ Pay within ${config.payment.windowMinutes} minutes.` : 'Please send your receipt after payment.');
-  const summary = orderActions.buildOrderSummary(order);
+  const heading = `✅ Order ${order.code} placed (${order.hallName})\n`;
+  // The total sits with the instructions rather than in the item summary, so
+  // trimming a long item list below can never cut it off.
+  const instructions = `\n💰 Total: ${formatCents(order.totalCents)}\n\n${PAY_WITH_QR_LINE}\n`
+    + '2️⃣ Send an UNCROPPED screenshot showing date, time, amount and recipient (swipe for example)\n\n'
+    + (config.payment.expiryEnabled ? `⚠️ Pay within ${config.payment.windowMinutes} min.` : 'Send your screenshot after paying.');
+  const summary = order.items
+    .map(item => `• ${item.name} x${item.quantity} = ${formatCents(item.lineTotalCents)}`)
+    .join('\n') || 'No items';
   const suffix = '\n… Full order: /orders';
   // Telegram photo captions allow 1024 characters. Keep payment details intact.
   const budget = Math.max(0, 1024 - heading.length - instructions.length);
@@ -1459,9 +1464,7 @@ async function sendPaymentInstructions(bot, order) {
     return;
   }
 
-  await orderActions.notify(bot, order.chatId,
-    caption.replace('Please use PayNow to pay using the QR above.',
-      'Payment image unavailable. Please contact an admin for payment details.'));
+  await orderActions.notify(bot, order.chatId, caption.replace(PAY_WITH_QR_LINE, NO_QR_LINE));
 }
 
 /**
@@ -1526,9 +1529,7 @@ async function handleOrderReject(bot, query, chatId, userId, messageId, data) {
       actor: 'admin',
       actorTelegramId: userId,
       reason: 'Rejected by admin',
-      customerMessage: `❌ Your order ${order.code} was rejected. `
-        + `The order has been sent too late or there was an issue with the order.\n\n`
-        + `Please restart your order by typing /start`,
+      customerMessage: `❌ Order ${order.code} was rejected (too late or an issue with it). /start to reorder.`,
     });
 
     if (!result.success) {
@@ -1618,8 +1619,7 @@ async function handlePaymentReject(bot, query, chatId, userId, messageId, data) 
       actor: 'admin',
       actorTelegramId: userId,
       reason: 'Payment rejected by admin',
-      customerMessage: `❌ Payment for Order ${order.code} was rejected.\n\n`
-        + `Please restart your order by typing /start`,
+      customerMessage: `❌ Payment for Order ${order.code} rejected. /start to reorder.`,
     });
 
     if (!result.success) {

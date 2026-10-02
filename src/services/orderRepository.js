@@ -520,7 +520,20 @@ async function enqueueSheetSync(orderId) {
       order_id: orderId,
       error: result.error.message,
     }));
+    return;
   }
+
+  sheetSyncEnqueues += 1;
+}
+
+// How many orders this warm instance has queued for the sheet. The webhook
+// compares it before and after an update to decide whether a drain is worth
+// running; a count (not a flag) so overlapping requests on one instance can only
+// cause an extra drain, never a missed one.
+let sheetSyncEnqueues = 0;
+
+function getSheetSyncEnqueueCount() {
+  return sheetSyncEnqueues;
 }
 
 
@@ -934,6 +947,7 @@ module.exports = {
   getExpiredUnpaidOrders,
 
   enqueueSheetSync,
+  getSheetSyncEnqueueCount,
 
   createPaymentSubmission,
   updatePaymentSubmission,

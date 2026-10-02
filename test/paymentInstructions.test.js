@@ -25,9 +25,9 @@ test('the QR and the example screenshot ship together as one swipeable gallery',
   assert.equal(media.length, 2);
   assert.equal(media[0].media, 'cached-image');
   assert.match(media[0].caption, /Rice x1/);
-  assert.match(media[0].caption, /Please use PayNow to pay using the QR above\./);
+  assert.match(media[0].caption, /Pay with the PayNow QR above/);
   assert.match(media[0].caption, /DG20260916-1/);
-  assert.match(media[0].caption, /Swipe for an example/);
+  assert.match(media[0].caption, /swipe for example/);
   // Telegram only renders an album's caption when exactly one item carries
   // one - a second caption here would silently blank out the whole thing.
   assert.equal(media[1].caption, undefined);
@@ -113,7 +113,7 @@ test('when a PayNow UEN is configured, the QR and example ship together as one a
   assert.equal(chatId, order.chatId);
   assert.equal(media.length, 2);
   assert.ok(Buffer.isBuffer(media[0].media));
-  assert.match(media[0].caption, /Please use PayNow to pay using the QR above\./);
+  assert.match(media[0].caption, /Pay with the PayNow QR above/);
   assert.equal(media[1].caption, undefined);
 });
 
@@ -137,7 +137,7 @@ test('a broken example never costs the customer their QR: falls back to a lone p
   // separately and best-effort.
   assert.equal(photos.length, 2);
   assert.ok(Buffer.isBuffer(photos[0][1]));
-  assert.match(photos[0][2].caption, /Please use PayNow to pay using the QR above\./);
+  assert.match(photos[0][2].caption, /Pay with the PayNow QR above/);
   assert.match(photos[1][2].caption, /Example of a valid screenshot/);
 });
 
@@ -145,6 +145,6 @@ test('large orders fit a photo caption while keeping payment instructions and to
   const caption = buildPaymentCaption({ ...order, items: Array.from({ length: 100 }, () => order.items[0]) });
   assert(caption.length <= 1024);
   assert.match(caption, /Full order: \/orders/);
-  assert.match(caption, /Amount due:.*5\.00/);
-  assert.match(caption, /MUST INCLUDE DATE, TIME AND PAYMENT AMOUNT AND TO WHO/);
+  assert.match(caption, /Total: .*5.00/);
+  assert.match(caption, /UNCROPPED screenshot showing date, time, amount and recipient/);
 });

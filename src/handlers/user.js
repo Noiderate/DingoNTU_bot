@@ -622,7 +622,7 @@ async function handleAddFood(bot, query, chatId, userId, data) {
   // confirm time, because stock can change between tapping and confirming.
   if (cartStore.getQuantity(cart, foodId) >= (item.stock || 0)) {
     await answerCallbackSafely(bot, query.id);
-    await bot.sendMessage(chatId, `❌ Sorry, there is no more stock for ${item.name}.`);
+    await bot.sendMessage(chatId, `❌ ${item.name} is sold out.`);
     return true;
   }
 
@@ -938,7 +938,7 @@ async function handleUserPhoto(bot, msg) {
     } else {
       await bot.sendMessage(
         chatId,
-        `⌛ The payment window for Order ${order.code} has closed. Please restart your order by typing /start.`
+        `⌛ Order ${order.code}'s payment window closed. /start to reorder.`
       );
     }
 

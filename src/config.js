@@ -84,6 +84,10 @@ const config = {
     // Stored receipt images of finished orders are deleted after this many
     // days to stay inside the free storage limit. 0 keeps them forever.
     receiptRetentionDays: readInt('RECEIPT_RETENTION_DAYS', 30),
+    // Off by default: the receipt stays on Telegram (telegram_file_id) and only
+    // its SHA-256 is kept for the replay guard, so nothing is shrunk or uploaded.
+    // Turn on to also keep a copy in the bucket for disputes.
+    storeReceiptImages: readBool('STORE_RECEIPT_IMAGES', false),
   },
 
   gemini: {
@@ -124,6 +128,12 @@ const config = {
   worker: {
     cronSecret: readString('CRON_SECRET'),
     timeBudgetMs: readInt('WORKER_TIME_BUDGET_MS', 240000),
+    // A scheduled run's own budget, much shorter than the one above. cron-job.org
+    // abandons a request after 30 s and disables a job after 25 failures in a
+    // row, so a tick must hand back well inside that; whatever it did not reach
+    // is picked up by the next tick. Left shared, a slow Sheets day would make
+    // every tick "fail" and eventually switch the scheduler off.
+    cronTimeBudgetMs: readInt('CRON_TIME_BUDGET_MS', 15000),
     lockLeaseMs: readInt('LOCK_LEASE_MS', 30000),
   },
 
