@@ -38,10 +38,10 @@ test('anything that looks like a credential is stripped before it reaches a chat
   assert.match(clean, /bot\[redacted\]/);
 });
 
-test('service hours are 15:00 to 02:59 SGT', () => {
+test('service hours are 15:00 to 03:59 SGT, matching the every-minute cron job', () => {
   assert.equal(isServiceHour(new Date('2026-10-02T07:00:00.000Z')), true);  // 15:00
-  assert.equal(isServiceHour(new Date('2026-10-02T18:59:00.000Z')), true);  // 02:59
-  assert.equal(isServiceHour(new Date('2026-10-02T19:00:00.000Z')), false); // 03:00
+  assert.equal(isServiceHour(new Date('2026-10-02T19:59:00.000Z')), true);  // 03:59
+  assert.equal(isServiceHour(new Date('2026-10-02T20:00:00.000Z')), false); // 04:00
   assert.equal(isServiceHour(new Date('2026-10-02T06:59:00.000Z')), false); // 14:59
 });
 

@@ -687,7 +687,7 @@ Gemini, the scheduler, the sheet-sync queue and the receipt queue, with âœ… / âš
   it, so it costs no quota. With no recent receipts it says so rather than
   showing green.
 - **Scheduler** reads the timestamp each `/api/cron/tick` leaves behind. More
-  than 3 minutes old in service hours (15:00-02:59 SGT) or 75 minutes old
+  than 3 minutes old in service hours (15:00-03:59 SGT) or 75 minutes old
   otherwise means cron-job.org is off or failing: check the job is still enabled.
   The thresholds are in `src/services/statusReport.js` and mirror the
   cron-job.org schedule, so change them together.

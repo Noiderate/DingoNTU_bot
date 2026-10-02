@@ -67,8 +67,8 @@ Customer cost is a guess: about 2 s of CPU per customer (receipt image shrinking
 
 | Job | Expression | Runs |
 |---|---|---|
-| Dingo Bot Tick | `* 15-23,0-2 * * *` | Every minute, 15:00 to 02:59 |
-| Dingo Bot Tick (off-hours) | `0 3-14 * * *` | Hourly, 03:00 to 14:00 |
+| Dingo Bot Tick (active hours: 3pm - 4am) | `* 15-23,0-3 * * *` | Every minute, 15:00 to 03:59 |
+| Dingo Bot Tick (slow - after hours) | `0 4-14 * * *` | Hourly, 04:00 to 14:00 |
 
 Both need the `Authorization: Bearer <CRON_SECRET>` header.
 Payment window is 2 minutes, so do not slow the in-service tick past 1 to 2 minutes (expiry lag holds stock).

@@ -29,7 +29,7 @@ const TELEGRAM_PENDING_WARN = 20;
 const GEMINI_WINDOW_MS = 60 * 60 * 1000;
 
 // How old the last tick may be before it is a problem. This mirrors the
-// cron-job.org schedule: every minute from 15:00 to 02:59 SGT, hourly otherwise.
+// cron-job.org schedule: every minute from 15:00 to 03:59 SGT, hourly otherwise.
 // Change both together.
 const TICK_STALE_IN_SERVICE_MS = 3 * 60 * 1000;
 const TICK_STALE_OFF_HOURS_MS = 75 * 60 * 1000;
@@ -71,7 +71,7 @@ function scrub(value) {
 
 function isServiceHour(now) {
   const hour = DateTime.fromJSDate(now, { zone: SGT }).hour;
-  return hour >= 15 || hour < 3;
+  return hour >= 15 || hour < 4;
 }
 
 function plural(count, word) {
