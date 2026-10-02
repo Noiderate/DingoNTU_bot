@@ -676,8 +676,26 @@ reintroduce the same gap.
 3. Vercel → Deployments → Runtime Logs. Search `webhook_handler_failed`.
 4. If `supabase.ok: false` → §3.4. If 401 → secret mismatch, §3.1.
 
+### Quick check from Telegram: `/status`
+
+Any admin can send `/status` to the bot in a **private chat** (it refuses in
+groups). It reports, one line each: Supabase, Telegram webhook, Google Sheets,
+Gemini, the scheduler, the sheet-sync queue and the receipt queue, with ✅ / ⚠️ /
+❌.
+
+- **Gemini** is judged from how the last hour of receipts went, not by calling
+  it, so it costs no quota. With no recent receipts it says so rather than
+  showing green.
+- **Scheduler** reads the timestamp each `/api/cron/tick` leaves behind. More
+  than 3 minutes old in service hours (15:00-02:59 SGT) or 75 minutes old
+  otherwise means cron-job.org is off or failing: check the job is still enabled.
+  The thresholds are in `src/services/statusReport.js` and mirror the
+  cron-job.org schedule, so change them together.
+- **Google Sheets** does one single-cell read, so it is cheap but not free.
+
 ### Payments are not being verified
 
+0. Send `/status` first.
 1. Any submissions stuck? Query in §3.15.
 2. Is the scheduler running? §3.1.
 3. `curl -H "Authorization: Bearer $CRON_SECRET" https://<app>/api/cron/tick`

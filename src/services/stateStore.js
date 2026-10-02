@@ -60,6 +60,9 @@ const KEYS = {
   // What was last written to the Today's Orders tab, { hash, writtenAt }, so an
   // unchanged day costs no Sheets write (see todaySheet).
   todaySheetSync: () => 'sheet:today_sync',
+  // When the scheduled tick last finished and which jobs failed, { at,
+  // durationMs, failed }, so /status can tell a dead scheduler from a quiet one.
+  cronLastTick: () => 'cron:last_tick',
   // Running tally of "sold out" moments for the Stats tab: { total, items: { name: count } }.
   soldOutStats: () => 'stats:sold_out',
   // Cached t.me deep link and payment-image file_id, to avoid repeat API calls.

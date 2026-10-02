@@ -18,6 +18,7 @@ const repo = require('../services/orderRepository');
 const stateStore = require('../services/stateStore');
 const cartStore = require('../services/cartStore');
 const statsService = require('../services/statsService');
+const { collectStatus, formatStatus } = require('../services/statusReport');
 const paynowQr = require('../services/paynowQr');
 const { getMenuMessageId, setMenuMessageId, clearMenuMessageId, isMessageLatestInChat } = require('../services/chatTracker');
 const { config } = require('../config');
@@ -811,7 +812,33 @@ async function handleAdminCommand(bot, msg) {
     return handleSkipCommand(bot, chatId, userId);
   }
 
+  if (text === '/status') {
+    return handleStatusCommand(bot, msg);
+  }
+
   return false;
+}
+
+/**
+ * Health of every outside service the bot depends on, in one message.
+ *
+ * Private chats only: the report carries error text and deploy details that do
+ * not belong in a group customers may be able to read.
+ */
+async function handleStatusCommand(bot, msg) {
+  const chatId = msg.chat.id;
+
+  if (msg.chat.type !== 'private') {
+    await bot.sendMessage(chatId, 'Send /status to me in a private chat.');
+    return true;
+  }
+
+  // The checks can take a few seconds when something is slow.
+  await bot.sendChatAction(chatId, 'typing').catch(() => {});
+
+  const results = await collectStatus(bot);
+  await bot.sendMessage(chatId, formatStatus(results));
+  return true;
 }
 
 /**
@@ -3266,6 +3293,7 @@ module.exports = {
   handleAdminCommand,
   handleAdminCallback,
   handleSkipCommand,
+  handleStatusCommand,
   handleResetPrompt,
   handleResetConfirm,
   handleResetFirst,

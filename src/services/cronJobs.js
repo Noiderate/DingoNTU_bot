@@ -10,6 +10,7 @@ const { ensureAdminIdsLoaded } = require('./googleSheets');
 const repo = require('./orderRepository');
 const orderStore = require('./orderStore');
 const orderActions = require('./orderActions');
+const stateStore = require('./stateStore');
 const { config } = require('../config');
 const { log } = require('../utils/logger');
 
@@ -223,6 +224,25 @@ async function runTick({ deadline = Date.now() + config.worker.cronTimeBudgetMs 
 }
 
 /**
+ * Leave a timestamp behind for /status. A scheduler that has been switched off
+ * (cron-job.org disables a job after repeated failures) is otherwise silent:
+ * nothing errors, the ticks just stop.
+ *
+ * Never allowed to fail the tick it is recording.
+ */
+async function recordTick(results, startedAt) {
+  try {
+    await stateStore.set(stateStore.KEYS.cronLastTick(), {
+      at: new Date().toISOString(),
+      durationMs: Date.now() - startedAt,
+      failed: Object.keys(results).filter(name => results[name] && results[name].error),
+    });
+  } catch (error) {
+    log('warn', 'cron_last_tick_not_recorded', { error: error.message });
+  }
+}
+
+/**
  * Wrap a job as a Vercel handler: check the secret, run it, report the result.
  */
 function createCronHandler(name, job) {
@@ -252,6 +272,7 @@ function createCronHandler(name, job) {
 module.exports = {
   isAuthorized,
   createCronHandler,
+  recordTick,
   runTick,
   runProcessPayments,
   runDrainSheetOutbox,

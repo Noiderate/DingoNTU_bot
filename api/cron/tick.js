@@ -1,4 +1,4 @@
-const { createCronHandler, runTick } = require('../../src/services/cronJobs');
+const { createCronHandler, recordTick, runTick } = require('../../src/services/cronJobs');
 
 /**
  * The single scheduled entry point.
@@ -11,4 +11,10 @@ const { createCronHandler, runTick } = require('../../src/services/cronJobs');
  *
  * The individual endpoints beside this one remain callable for debugging.
  */
-module.exports = createCronHandler('tick', ({ deadline }) => runTick({ deadline }));
+module.exports = createCronHandler('tick', async ({ deadline }) => {
+  const startedAt = Date.now();
+  const results = await runTick({ deadline });
+
+  await recordTick(results, startedAt);
+  return results;
+});
