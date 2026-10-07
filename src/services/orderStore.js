@@ -146,6 +146,12 @@ async function getActiveOrdersByHall(hallName) {
   return (await repo.getActiveOrdersByHall(hallName)).map(toOrder);
 }
 
+/** Orders served in the last `hours` whose payment never cleared (for the round-reset summary). */
+async function getRecentServedUnpaidOrders(hours = 36) {
+  const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  return (await repo.getServedUnpaidOrdersSince(since)).map(toOrder);
+}
+
 // Both outcomes transition the order to the same SERVED status - "served in
 // person" vs "left unattended" is a real operational difference worth telling
 // the customer and recording, but not a different order lifecycle state, so
@@ -311,6 +317,7 @@ module.exports = {
   getAwaitingPaymentOrder,
   getActiveOrders,
   getActiveOrdersByHall,
+  getRecentServedUnpaidOrders,
   markOrderServed,
   getHallServeProgress,
 

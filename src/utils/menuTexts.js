@@ -252,10 +252,7 @@ function deliveryModeText(halls, orders, foodItems = [], stage = {}) {
   }
 
   const gatingLine = gatingStageLine(stage);
-  const resetLine = stage.resetRequired
-    ? "⚠️ Last round hasn't been reset yet. Reset Halls and Orders before posting tonight's preorder."
-    : null;
-  const sections = [stockSection, ...[gatingLine, resetLine].filter(Boolean)];
+  const sections = [stockSection, ...[gatingLine].filter(Boolean)];
 
   if (halls.length === 0) {
     return `🚚 Delivery Mode\n\n${sections.join('\n\n')}\n\nNo halls available.`;
@@ -305,11 +302,11 @@ function deliveryModeText(halls, orders, foodItems = [], stage = {}) {
 function preorderPostText(custom) {
   const text = custom.text
     ? `"${custom.text}"`
-    : 'Default - "Preorders available for {hall} onwards"';
+    : 'Default - "🍱 Hall delivery orders are now open!"';
 
   return '📝 Dingo Post\n\n'
-    + 'Your text replaces the first line of the preorder post in the Dingo channel. '
-    + 'The food list, contact line and ordering button are always added below it.\n\n'
+    + 'Your text replaces the first line of the stage-1 (orders open) post in the Dingo channel. '
+    + 'The cutoff time, food list, contact line and ordering button are always added below it.\n\n'
     + `Text: ${text}\n`
     + `Photo: ${custom.photoFileId ? 'Attached - the post is sent as this photo, with the text as its caption' : 'None'}\n\n`
     + 'Changes apply to a live preorder post straight away.';

@@ -17,6 +17,7 @@ function createCallbackItemToken(value) {
 function mainMenuKeyboard() {
   return {
     inline_keyboard: [
+      [{ text: '📣 Post Orders Open', callback_data: CALLBACKS.STAGE1_POST }],
       [{ text: '⚙️ Settings', callback_data: CALLBACKS.ADMIN_SETTINGS }],
       [{ text: '🚚 Enter Delivery Mode', callback_data: CALLBACKS.SETTINGS_DELIVERY_MODE }],
       [{ text: '📊 Stats', callback_data: CALLBACKS.ADMIN_STATS }],
@@ -35,6 +36,7 @@ function settingsMenuKeyboard() {
       [{ text: '🍔 Manage Food Items', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }],
       [{ text: '🏢 Manage Halls', callback_data: CALLBACKS.SETTINGS_MANAGE_HALLS }],
       [{ text: '📝 Edit Dingo Post', callback_data: CALLBACKS.SETTINGS_PREORDER_POST }],
+      [{ text: '⏰ Order Schedule', callback_data: CALLBACKS.SETTINGS_ORDER_SCHEDULE }],
       [{ text: '← Back', callback_data: CALLBACKS.ADMIN_MENU_BACK }],
     ],
   };
@@ -269,14 +271,12 @@ const MANUALLY_POSTED_MODES = ['preorder', 'here'];
  * has no previous hall to auto-trigger off of (see getGatingHall in
  * deliveryMode.js) and so needs a manual button same as 'here' does.
  *
- * resetRequired: last round was never reset, so the preorder button is
- * swapped for one that starts the reset (see deliveryMode.isResetRequired).
  * serveListHalls: [{ hall, count }] for halls already visited this round that
  * still have unserved orders - one button each to bring back their serve list.
  */
 function deliveryModeKeyboard(
   nextHallToPost, nextHallToPostMode, lastBlockedHall, showFinish, hallHasNoOrders, comingNeedsManualPost = false,
-  { resetRequired = false, serveListHalls = [] } = {}
+  { serveListHalls = [] } = {}
 ) {
   const buttons = [];
   const canManuallyPost = nextHallToPost && (
@@ -284,11 +284,9 @@ function deliveryModeKeyboard(
     || (nextHallToPostMode === 'coming' && comingNeedsManualPost)
   );
 
-  if (canManuallyPost && nextHallToPostMode === 'preorder' && resetRequired) {
-    buttons.push([{ text: '🔄 Reset Halls and Orders first', callback_data: CALLBACKS.DELIVERY_MODE_RESET_FIRST }]);
-  } else if (canManuallyPost) {
+  if (canManuallyPost) {
     const postText = nextHallToPostMode === 'preorder'
-      ? `Post preorder available message   `
+      ? `📣 Confirm stock & post   `
       : nextHallToPostMode === 'coming'
         ? `${nextHallToPost.shortName || nextHallToPost.name}, we are coming   `
         : `${nextHallToPost.shortName || nextHallToPost.name}, we are here   `;

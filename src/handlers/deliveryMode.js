@@ -4,6 +4,7 @@ const keyboards = require('../utils/keyboards');
 const menuTexts = require('../utils/menuTexts');
 const orderStore = require('../services/orderStore');
 const stateStore = require('../services/stateStore');
+const orderWindow = require('../services/orderWindow');
 const { getSupabase, unwrap } = require('../services/supabase');
 const {
   noteChatMessage,
@@ -108,6 +109,7 @@ async function consumeTrackedDingoMessageIds() {
 
   await setDingoPosts({ coming: null, here: null, 'get-ready': null });
   await stateStore.remove(stateStore.KEYS.preorderPost());
+  await orderWindow.clearWindow();
   await setSequencer({ ...DEFAULT_SEQUENCER });
 
   return [...new Set(ids)];
@@ -249,17 +251,6 @@ function visitedHalls(halls, sequencer) {
   return halls.slice(0, index);
 }
 
-/**
- * Whether last round's clean-up is still outstanding: Finish Delivery was
- * tapped but its Reset wasn't (the one-time reset token is still issued), or
- * a hall is still closed. Posting the preorder then would advertise halls
- * customers can't actually order for - so it is refused until Reset runs.
- */
-async function isResetRequired(halls, blocked) {
-  const token = await stateStore.get(stateStore.KEYS.resetToken(), null);
-  return Boolean(token) || halls.some(hall => blocked.isBlocked(hall.name));
-}
-
 // --- Menu rendering ----------------------------------------------------------
 
 async function getDeliveryModeView() {
@@ -303,8 +294,6 @@ async function getDeliveryModeView() {
   const roundOver = halls.length > 1 && mode === 'get-ready' && nextHallToPost === halls[0];
   const showFinish = allHallsBlocked || roundOver;
 
-  const resetRequired = mode === 'preorder' && await isResetRequired(halls, blocked);
-
   const serveListHalls = visitedHalls(halls, sequencer)
     .map(hall => ({ hall, count: orders.filter(order => order.hallName === hall.name).length }))
     .filter(entry => entry.count > 0);
@@ -315,11 +304,10 @@ async function getDeliveryModeView() {
       mode,
       gatingHall,
       gatingProgress,
-      resetRequired,
     }),
     keyboard: keyboards.deliveryModeKeyboard(
       nextHallToPost, mode, blocked.last, showFinish, hallHasNoOrders, comingNeedsManualPost,
-      { resetRequired, serveListHalls }
+      { serveListHalls }
     ),
   };
 }
@@ -435,7 +423,6 @@ module.exports = {
   getNextHallToPostState,
   getGatingHall,
   visitedHalls,
-  isResetRequired,
   recordDingoPost,
   getDingoMsgIdsToDelete,
   consumeTrackedDingoMessageIds,

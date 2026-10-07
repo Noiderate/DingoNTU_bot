@@ -45,10 +45,18 @@ const KEYS = {
   // One-time token issued by Finish Delivery and carried by its "Reset Halls
   // and Orders" button. Reset only runs for the current token and consumes
   // it, so a leftover button from an earlier night can't wipe a live round.
-  resetToken: () => 'delivery:reset_token',
   // The live preorder post being refreshed, and a hash of its rendered content
   // so an unchanged render skips the Telegram edit.
   preorderPost: () => 'delivery:preorder_post',
+  // Which ordering stage the night is in ({ stage, postedAt, cutoffAt }),
+  // see orderWindow.js. Absent before stage 1 is posted and after Finish Delivery.
+  orderWindow: () => 'delivery:order_window',
+  // Admin-set target post time and order cutoff ({ postTime, cutoffTime }, HH:mm SGT).
+  orderSchedule: () => 'settings:order_schedule',
+  // Which stage-1 reminders were already sent today ({ date, reminded, nudged }).
+  orderReminders: () => 'delivery:order_reminders',
+  // The stage-2 confirm-stock screen being edited ({ hallId, adjust }).
+  stagePanel: () => 'delivery:stage2_panel',
   // Admin-set first line and photo for the preorder post ({ text, photoFileId },
   // either may be null). Set under Settings > Edit Dingo Post; no expiry.
   preorderCustom: () => 'settings:preorder_custom',

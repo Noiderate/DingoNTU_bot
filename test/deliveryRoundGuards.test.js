@@ -14,10 +14,9 @@ const HALLS = [
   { id: 4, name: 'Hall C' },
 ];
 
-function mockSequencer(t, sequencer, { resetToken = null } = {}) {
+function mockSequencer(t, sequencer) {
   t.mock.method(stateStore, 'get', async (key, fallback = null) => {
     if (key === stateStore.KEYS.deliverySequencer()) return sequencer;
-    if (key === stateStore.KEYS.resetToken()) return resetToken;
     return fallback;
   });
 }
@@ -66,7 +65,7 @@ test('visitedHalls: the halls whose "we are here" has already posted this round'
   assert.deepEqual(visitedHalls(HALLS, { index: 0, mode: 'get-ready' }).length, 3);
 });
 
-function mockView(t, { sequencer, orders = [], blocked = [], resetToken = null }) {
+function mockView(t, { sequencer, orders = [], blocked = [] }) {
   t.mock.method(googleSheets, 'getHalls', async () => HALLS);
   t.mock.method(menuStore, 'getFoodItems', async () => []);
   t.mock.method(orderStore, 'getActiveOrders', async () => orders);
@@ -76,7 +75,7 @@ function mockView(t, { sequencer, orders = [], blocked = [], resetToken = null }
     names: blocked,
     last: blocked[blocked.length - 1] || null,
   }));
-  mockSequencer(t, sequencer, { resetToken });
+  mockSequencer(t, sequencer);
 }
 
 test('the delivery menu offers a serve list for a visited hall that still has unserved orders', async t => {
@@ -120,28 +119,10 @@ test('the serve list button resends the hall\'s list without posting to the chan
 });
 
 
-// --- No preorder post until last round is reset --------------------------------
+// --- The preorder post resets last round automatically ----------------------
 
-test('the preorder button is replaced by "Reset first" while Finish\'s reset is still outstanding', async t => {
-  mockView(t, { sequencer: { index: 0, mode: 'preorder' }, resetToken: 'tok' });
-
-  const { keyboard, text } = await getDeliveryModeView();
-
-  assert.ok(callbacks(keyboard).includes(CALLBACKS.DELIVERY_MODE_RESET_FIRST));
-  assert.ok(!callbacks(keyboard).some(data => data.startsWith(`${CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX}preorder`)));
-  assert.match(text, /hasn't been reset yet/);
-});
-
-test('the preorder button is replaced while any hall is still closed', async t => {
+test('the preorder button is always offered, even with a hall still closed', async t => {
   mockView(t, { sequencer: { index: 0, mode: 'preorder' }, blocked: ['Hall A'] });
-
-  const { keyboard } = await getDeliveryModeView();
-
-  assert.ok(callbacks(keyboard).includes(CALLBACKS.DELIVERY_MODE_RESET_FIRST));
-});
-
-test('after a reset the preorder button is back', async t => {
-  mockView(t, { sequencer: { index: 0, mode: 'preorder' } });
 
   const { keyboard } = await getDeliveryModeView();
 
@@ -149,29 +130,60 @@ test('after a reset the preorder button is back', async t => {
   assert.ok(!callbacks(keyboard).includes(CALLBACKS.DELIVERY_MODE_RESET_FIRST));
 });
 
-test('an old preorder button (or /skip) is refused server-side until the reset runs', async t => {
-  t.mock.method(googleSheets, 'getHalls', async () => HALLS);
-  mockSequencer(t, { index: 0, mode: 'preorder' }, { resetToken: 'tok' });
+function mockRoundReset(t, { leftover = [], servedUnpaid = [] } = {}) {
+  const calls = [];
+  t.mock.method(orderStore, 'getActiveOrders', async () => leftover);
+  t.mock.method(orderStore, 'getRecentServedUnpaidOrders', async () => servedUnpaid);
+  t.mock.method(menuStore, 'restoreStockBaselines', async () => { calls.push('stock'); return { changes: [], noBaselineItems: [] }; });
+  t.mock.method(orderStore, 'clearBlockedHalls', async () => { calls.push('unblock'); });
   t.mock.method(orderStore, 'loadBlockedHalls', async () => ({ isBlocked: () => false, names: [], last: null }));
+  t.mock.method(stateStore, 'set', async () => {});
+  t.mock.method(stateStore, 'remove', async () => {});
   t.mock.method(stateStore, 'acquireLock', async () => 'holder');
   t.mock.method(stateStore, 'releaseLock', async () => true);
   t.mock.method(stateStore, 'getMany', async () => ({}));
+  return calls;
+}
 
-  const bot = { async sendMessage() { throw new Error('must not post the preorder'); } };
+test('runRoundReset restores stock, reopens halls and summarises served-but-unpaid orders', async t => {
+  t.mock.method(googleSheets, 'getHalls', async () => HALLS);
+  mockSequencer(t, { index: 2, mode: 'get-ready' });
+  const calls = mockRoundReset(t, {
+    servedUnpaid: [{ code: 'DG9', hallName: 'Hall B', userName: 'Ali', username: 'ali', items: [] }],
+  });
+
+  const summary = await admin.runRoundReset({});
+
+  assert.deepEqual(calls, ['stock', 'unblock']);
+  assert.match(summary, /were reset for the new round/);
+  assert.match(summary, /Served but never paid/);
+  assert.match(summary, /DG9/);
+});
+
+test('resetRoundBeforePreorder resets first and sends the summary to the triggering admin', async t => {
+  t.mock.method(googleSheets, 'getHalls', async () => HALLS);
+  mockSequencer(t, { index: 0, mode: 'preorder' });
+  const calls = mockRoundReset(t);
+
+  const sent = [];
+  const bot = { async sendMessage(chatId, text) { sent.push({ chatId, text, calls: [...calls] }); } };
+
+  await admin.resetRoundBeforePreorder(bot, 555);
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].chatId, 555);
+  assert.match(sent[0].text, /were reset for the new round/);
+  assert.deepEqual(sent[0].calls, ['stock', 'unblock']);
+});
+
+test('posting the preorder no longer refuses when last round was never reset', async t => {
+  t.mock.method(googleSheets, 'getHalls', async () => HALLS);
+  mockSequencer(t, { index: 0, mode: 'preorder' });
+  mockRoundReset(t);
+
+  const bot = { async sendMessage() { throw new Error('reached the channel send'); } };
 
   const result = await admin.postDingoUpdate(bot, { hallId: 2, postMode: 'preorder' });
 
-  assert.deepEqual(result, { posted: false, reason: 'reset_required' });
-});
-
-test('"Reset first" reuses Finish\'s token so both reset buttons stay valid', async t => {
-  mockSequencer(t, { index: 0, mode: 'preorder' }, { resetToken: 'tok' });
-  t.mock.method(stateStore, 'set', async () => { throw new Error('must not issue a second token'); });
-
-  const sent = [];
-  const bot = { async sendMessage(chatId, text, opts) { sent.push(opts); } };
-
-  await admin.handleResetFirst(bot, 555, async () => {});
-
-  assert.equal(sent[0].reply_markup.inline_keyboard[0][0].callback_data, `${CALLBACKS.DELIVERY_MODE_RESET_HALLS}:tok`);
+  assert.notEqual(result.reason, 'reset_required');
 });

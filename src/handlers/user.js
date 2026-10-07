@@ -3,7 +3,7 @@ const { isAdmin, getAdminIds } = require('../services/googleSheets');
 const menuStore = require('../services/menuStore');
 const { isTemporarilyUnavailable } = require('../utils/unavailable');
 const { CALLBACKS } = require('../config/constants');
-const { hasPreorderPost } = require('./deliveryMode');
+const orderWindow = require('../services/orderWindow');
 const { editMessageTextSafely } = require('../utils/telegramEdits');
 const orderStore = require('../services/orderStore');
 const repo = require('../services/orderRepository');
@@ -29,7 +29,7 @@ const USER_CALLBACKS = {
   ORDERS_PAGE_PREFIX: 'uorders_page_',
 };
 
-const ORDERING_NOT_OPEN_TEXT = '⏳ Ordering is not open yet. Please wait for preorder announcement.';
+const ORDERING_NOT_OPEN_TEXT = '⏳ Ordering is closed right now, but the next order window will open soon. Keep an eye on the channel!';
 const ORDERS_PAGE_SIZE = 5;
 
 /** Friendly labels for the customer's own order history. */
@@ -46,7 +46,7 @@ const STATUS_LABELS = {
 };
 
 async function isOrderingOpen() {
-  return hasPreorderPost();
+  return orderWindow.isOrderingOpen();
 }
 
 

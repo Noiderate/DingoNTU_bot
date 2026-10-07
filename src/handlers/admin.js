@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const googleSheets = require('../services/googleSheets');
 const {
   isAdmin, getAdminIds, reloadAdminIds, addAdmin, deleteAdmin,
@@ -16,6 +15,9 @@ const orderStore = require('../services/orderStore');
 const orderActions = require('../services/orderActions');
 const repo = require('../services/orderRepository');
 const stateStore = require('../services/stateStore');
+const orderWindow = require('../services/orderWindow');
+const { DateTime } = require('luxon');
+const { SGT } = require('../utils/time');
 const cartStore = require('../services/cartStore');
 const statsService = require('../services/statsService');
 const { collectStatus, formatStatus } = require('../services/statusReport');
@@ -32,7 +34,6 @@ const {
   isExpectedNextHallToPost,
   getNextHallToPostState,
   getGatingHall,
-  isResetRequired,
   recordDingoPost,
   getDingoMsgIdsToDelete,
   consumeTrackedDingoMessageIds,
@@ -335,13 +336,13 @@ async function setPreorderCustom(patch) {
  */
 function buildPreorderIntro(hallLabel, customText) {
   if (!customText) {
-    return `Preorders available for ${escapeHtml(hallLabel)} onwards`;
+    return '🍱 Hall delivery orders are now open!';
   }
 
   return escapeHtml(customText).replace(/\{hall\}/gi, () => escapeHtml(hallLabel));
 }
 
-async function buildPreorderMessageText(hallLabel, adminUsername, { customText = null, maxLength = Infinity } = {}) {
+async function buildPreorderMessageText(hallLabel, adminUsername, { customText = null, maxLength = Infinity, cutoffLabel = null } = {}) {
   // Throws rather than rendering "No food currently available" onto the public
   // post whenever a Sheets read blips.
   const foodItems = await menuStore.getFoodItemsOrThrow();
@@ -351,7 +352,10 @@ async function buildPreorderMessageText(hallLabel, adminUsername, { customText =
 
   const intro = buildPreorderIntro(hallLabel, customText);
   const foodLines = buildAvailableFoodLines(foodItems);
-  const render = lines => `${intro}\n\n`
+  const cutoffLine = cutoffLabel
+    ? `⏰ Order before ${cutoffLabel} - ordering closes sharply then so the drivers can focus on delivering.\n\n`
+    : '';
+  const render = lines => `${intro}\n\n${cutoffLine}`
     + `Available food:\n${lines.join('\n')}\n\n`
     + `Click below to start ordering.\n${contactLine}`;
 
@@ -365,22 +369,71 @@ async function buildPreorderMessageText(hallLabel, adminUsername, { customText =
   return text;
 }
 
+async function buildStageTwoMessageText(adminUsername) {
+  const foodItems = await menuStore.getFoodItemsOrThrow();
+  const available = foodItems.filter(item => Number(item.stock) > 0);
+  const lines = available.length
+    ? available.map(item => `• ${escapeHtml(item.name)} (${item.stock} left)`)
+    : ['• Nothing left right now'];
+  const contactLine = adminUsername
+    ? `For any delivery related issues, message @${adminUsername}.`
+    : 'For any delivery related issues, please contact an admin.';
+
+  return '🚚 We are on our way - and we have a few spares!\n\n'
+    + `Still available:\n${lines.join('\n')}\n\n`
+    + 'Tap below to order. This is only for halls we have not reached yet - '
+    + `once we pass your hall, ordering for it closes.\n${contactLine}`;
+}
+
 /**
  * Everything the live preorder post shows, rendered once so posting, editing
  * and reposting can't drift apart. photoFileId is set when an admin attached
  * a photo in Settings - the post is then that photo with the text as caption.
  */
-async function renderPreorderContent(bot, hallLabel) {
-  const custom = await getPreorderCustom();
+async function renderPreorderContent(bot, hallLabel, options = {}) {
+  const window = await orderWindow.getWindow();
+  const stage = options.stage || (window && window.stage) || null;
+
+  // Ordering is closed: same post, now saying so, with no button. A photo on
+  // the post stays (an edit can't remove it).
+  if (stage === orderWindow.STAGES.CLOSED) {
+    const post = await getPreorderPost();
+    const closedPhoto = post.photoFileId || null;
+    return {
+      text: STAGE1_CLOSED_POST_TEXT,
+      photoFileId: closedPhoto,
+      button: null,
+      contentHash: `closed::${closedPhoto || ''}`,
+    };
+  }
+
   const adminId = await googleSheets.getPreorderAdminTag();
   const adminUsername = adminId ? await googleSheets.getAdminUsernameById(bot, adminId) : null;
+  const startUrl = await getBotStartUrl(bot);
+
+  // Spare stock: fixed wording, live remaining stock, never the stage-1 photo.
+  if (stage === orderWindow.STAGES.STAGE2) {
+    const text = await buildStageTwoMessageText(adminUsername);
+    return {
+      text,
+      photoFileId: null,
+      button: buildPreorderStartButton(startUrl),
+      contentHash: `${text}::${startUrl}::`,
+    };
+  }
+
+  const custom = await getPreorderCustom();
   const photoFileId = custom.photoFileId || null;
+  const cutoffAtIso = options.cutoffAt || (window && window.cutoffAt) || null;
+  const cutoffLabel = cutoffAtIso
+    ? orderWindow.formatClock(DateTime.fromISO(cutoffAtIso).setZone(SGT).toFormat('HH:mm'))
+    : null;
 
   const text = await buildPreorderMessageText(hallLabel, adminUsername, {
     customText: custom.text,
     maxLength: photoFileId ? PHOTO_CAPTION_MAX_LENGTH : Infinity,
+    cutoffLabel,
   });
-  const startUrl = await getBotStartUrl(bot);
 
   return {
     text,
@@ -476,7 +529,9 @@ async function renderPreorderPost(bot) {
   }
 
   try {
-    const markup = content.button ? { reply_markup: content.button } : {};
+    // No button (ordering closed) must clear the old one - an edit that omits
+    // reply_markup can leave the previous keyboard in place.
+    const markup = { reply_markup: content.button || { inline_keyboard: [] } };
 
     if (content.photoFileId) {
       await bot.editMessageCaption(content.text, {
@@ -558,6 +613,12 @@ async function repostPreorderAvailability(bot) {
   const post = await getPreorderPost();
 
   if (!post.channelId || !post.msgId) {
+    return;
+  }
+
+  // A closed post has nothing to announce; re-sending it would just be noise.
+  const window = await orderWindow.getWindow();
+  if (window && window.stage === orderWindow.STAGES.CLOSED) {
     return;
   }
 
@@ -862,6 +923,15 @@ async function handleSkipCommand(bot, chatId, userId) {
     return true;
   }
 
+  // Spare stock always goes through the confirm-stock screen.
+  if (mode === 'preorder') {
+    return showStageTwoPanel(bot, chatId, userId, nextHall.id, async text => {
+      if (text) {
+        await bot.sendMessage(chatId, text);
+      }
+    });
+  }
+
   const result = await postDingoUpdate(bot, { hallId: nextHall.id, postMode: mode, notifyChatId: chatId });
 
   if (!result.posted) {
@@ -869,7 +939,6 @@ async function handleSkipCommand(bot, chatId, userId) {
       locked: 'A delivery update is already being posted - try again in a moment.',
       hall_not_found: 'Hall not found - the halls list may have changed since this was queued.',
       stale: 'This has already moved on. Reopen Delivery Mode to see the current state.',
-      reset_required: "Last round hasn't been reset yet. Tap Reset Halls and Orders in Delivery Mode before posting the preorder.",
       no_channel: 'DINGO_CHANNEL_ID is not set in the environment.',
       send_failed: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.',
       sheets_unavailable: 'Could not read the menu. Nothing was posted - try again in a moment.',
@@ -978,12 +1047,20 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
       return true;
     }
 
+    if (state === STATES.EDIT_POST_TIME || state === STATES.EDIT_CUTOFF_TIME) {
+      return handleScheduleInput(bot, chatId, userId, text, state, messageId);
+    }
+
     if (state === STATES.ATTACH_PREORDER_PHOTO) {
       await bot.sendMessage(chatId, '🖼 Please send a photo for the preorder post (or tap Back).');
       return true;
     }
 
     return false;
+  }
+
+  if (state.mode === STATES.EDIT_STAGE2_STOCK) {
+    return handleStageTwoStockInput(bot, chatId, userId, text, state, messageId);
   }
 
   if (state.mode === STATES.EDIT_FOOD_PRICE) {
@@ -2027,6 +2104,10 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     return true;
   }
 
+  if (await handleStageCallbacks(bot, query, chatId, userId, data, answer)) {
+    return true;
+  }
+
   if (await handlePreorderPostCallback(bot, query, chatId, userId, data, answer)) {
     return true;
   }
@@ -2157,35 +2238,17 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     return handleFinishDelivery(bot, query, chatId, userId);
   }
 
-  if (data === CALLBACKS.DELIVERY_MODE_RESET_FIRST) {
-    return handleResetFirst(bot, chatId, answer);
-  }
-
   if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_SERVE_LIST_PREFIX)) {
     return handleServeListResend(bot, chatId, extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_SERVE_LIST_PREFIX), answer);
   }
 
-  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_RESET_CONFIRM_PREFIX)) {
-    const token = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_RESET_CONFIRM_PREFIX);
-    return handleResetConfirm(bot, chatId, messageId, token, answer);
-  }
-
-  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_RESET_CANCEL_PREFIX)) {
-    const token = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_RESET_CANCEL_PREFIX);
-    await editMessageTextSafely(bot, FINISH_PROMPT_TEXT, {
-      chat_id: chatId,
-      message_id: messageId,
-      reply_markup: resetPromptKeyboard(token),
-    }).catch(() => {});
-    await answer('Reset cancelled.');
+  // Reset buttons from before the reset became automatic: tell the admin
+  // instead of letting the tap spin.
+  if (data === CALLBACKS.DELIVERY_MODE_RESET_FIRST
+    || [CALLBACKS.DELIVERY_MODE_RESET_HALLS, CALLBACKS.DELIVERY_MODE_RESET_CONFIRM_PREFIX, CALLBACKS.DELIVERY_MODE_RESET_CANCEL_PREFIX]
+      .some(prefix => isCallbackType(data, prefix))) {
+    await answer('Halls and orders now reset automatically when the preorder is posted.', { show_alert: true });
     return true;
-  }
-
-  if (isCallbackType(data, CALLBACKS.DELIVERY_MODE_RESET_HALLS)) {
-    // Buttons sent before tokens existed carry none, and are refused like
-    // any other outdated one.
-    const token = data.slice(CALLBACKS.DELIVERY_MODE_RESET_HALLS.length + 1);
-    return handleResetPrompt(bot, chatId, messageId, token, answer);
   }
 
   return false;
@@ -2315,24 +2378,24 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null, onP
       return { posted: false, reason: 'stale' };
     }
 
-    // Enforced here, not just by hiding the button: an old menu's button or
-    // /skip could still reach a preorder post before last round is reset.
-    if (postMode === 'preorder' && await isResetRequired(halls, await orderStore.loadBlockedHalls())) {
-      await refreshDeliveryModeMenus(bot);
-      return { posted: false, reason: 'reset_required' };
-    }
-
     const channelId = config.telegram.dingoChannelId;
 
     if (!channelId) {
       return { posted: false, reason: 'no_channel' };
     }
 
+
     const hallLabel = hall.shortName || hall.name;
 
     // The preorder post is the one with a menu, an ordering button and
     // possibly an admin-attached photo; the other stages are plain one-liners.
-    const preorderContent = postMode === 'preorder' ? await renderPreorderContent(bot, hallLabel) : null;
+    // The 'preorder' step is stage 2 now (spare stock); stage 1 is posted by
+    // postStageOne. The stage-1 / "ordering closed" post it replaces is deleted
+    // once the new post is out.
+    const preorderContent = postMode === 'preorder'
+      ? await renderPreorderContent(bot, hallLabel, { stage: orderWindow.STAGES.STAGE2 })
+      : null;
+    const previousPreorderPost = postMode === 'preorder' ? await getPreorderPost() : null;
 
     let text;
     if (preorderContent) {
@@ -2369,9 +2432,14 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null, onP
 
     const toDelete = await timer.step('msgIds', () => getDingoMsgIdsToDelete(postMode));
 
+    if (previousPreorderPost && previousPreorderPost.msgId) {
+      toDelete.push(previousPreorderPost.msgId);
+    }
+
     await timer.step('recordPost', async () => {
       if (preorderContent) {
         await recordPreorderPost(channelId, sent.message_id, preorderContent.photoFileId);
+        await orderWindow.openStageTwo();
       } else {
         await recordDingoPost(postMode, sent.message_id);
       }
@@ -2529,7 +2597,519 @@ async function autoAdvanceDeliveryStage(bot, hallName) {
   }
 }
 
+// --- Ordering stages -----------------------------------------------------------
+//
+// A delivery night has two ordering stages (see services/orderWindow.js):
+//   stage 1 - "orders open", posted around the target time, cut off sharply at
+//             the cutoff time, so the rush happens before delivery starts;
+//   stage 2 - "spare stock", posted once the drivers have left, for whatever
+//             the drivers still carry.
+// Stage 1 is posted from a reminder DM or the main admin menu. Stage 2 is the
+// first button in Delivery Mode, behind a confirm-stock screen.
+
+const STAGE1_CLOSED_POST_TEXT = '🔒 Ordering is now closed.\n\n'
+  + 'Thanks everyone - our drivers are getting your food out to you! '
+  + 'If we have any spares once we are on the road, we will post them here.';
+
+const STAGE1_POST_FAILURES = {
+  locked: 'A delivery update is already being posted - try again in a moment.',
+  hall_not_found: 'No halls found - add a hall under Settings first.',
+  no_channel: 'DINGO_CHANNEL_ID is not set in the environment.',
+  send_failed: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.',
+  sheets_unavailable: 'Could not read the menu. Nothing was posted - try again in a moment.',
+};
+
+/**
+ * Post the stage-1 "orders open" message.
+ *
+ * Starts a new round, so last round is wrapped up first (orders closed, stock
+ * restored, halls reopened - see runRoundReset) and any leftover posts from the
+ * previous round are removed once the new post is out.
+ */
+async function postStageOne(bot, { notifyChatId = null } = {}) {
+  const holder = await stateStore.acquireLock(stateStore.LOCKS.deliveryPost(), { leaseMs: 120000 });
+
+  if (!holder) {
+    return { posted: false, reason: 'locked' };
+  }
+
+  try {
+    const channelId = config.telegram.dingoChannelId;
+
+    if (!channelId) {
+      return { posted: false, reason: 'no_channel' };
+    }
+
+    const halls = await googleSheets.getHalls({ fresh: true });
+
+    if (!halls.length) {
+      return { posted: false, reason: 'hall_not_found' };
+    }
+
+    await resetRoundBeforePreorder(bot, notifyChatId);
+
+    const schedule = await orderWindow.getSchedule();
+    const cutoffAt = orderWindow.nextOccurrence(orderWindow.nowSgt(), schedule.cutoffTime);
+    const hall = halls[0];
+    const content = await renderPreorderContent(bot, hall.shortName || hall.name, {
+      stage: orderWindow.STAGES.STAGE1,
+      cutoffAt: cutoffAt.toUTC().toISO(),
+    });
+
+    let sent;
+    try {
+      sent = await sendPreorderContent(bot, channelId, content);
+    } catch (error) {
+      log('error', 'stage1_post_failed', { error: error.message });
+      return { posted: false, reason: 'send_failed' };
+    }
+
+    // Everything from the last round (old order post, coming/here posts) goes,
+    // and the sequencer starts over; the new post is recorded after that.
+    const oldIds = await consumeTrackedDingoMessageIds();
+    await recordPreorderPost(channelId, sent.message_id, content.photoFileId);
+    await orderWindow.openStageOne(schedule.cutoffTime);
+
+    for (const messageId of oldIds) {
+      try {
+        await bot.deleteMessage(channelId, messageId);
+      } catch (error) {
+        log('warn', 'stage1_old_post_delete_failed', { error: error.message });
+      }
+    }
+
+    await refreshDeliveryModeMenus(bot);
+    return { posted: true, cutoffLabel: orderWindow.formatClock(schedule.cutoffTime) };
+  } catch (error) {
+    if (isTemporarilyUnavailable(error)) {
+      log('warn', 'stage1_post_sheets_unavailable', { error: error.message });
+      return { posted: false, reason: 'sheets_unavailable' };
+    }
+    throw error;
+  } finally {
+    await stateStore.releaseLock(stateStore.LOCKS.deliveryPost(), holder);
+  }
+}
+
+async function runStageOnePost(bot, chatId, answer) {
+  const result = await postStageOne(bot, { notifyChatId: chatId });
+
+  if (!result.posted) {
+    await answer(STAGE1_POST_FAILURES[result.reason] || 'Could not post.', { show_alert: true });
+    return true;
+  }
+
+  await answer('Orders are open!');
+  await bot.sendMessage(
+    chatId,
+    `✅ Orders are open - posted to the Dingo channel. Ordering closes at ${result.cutoffLabel}.`
+  );
+  return true;
+}
+
+/**
+ * Tonight's reminders to post stage 1: one 30 minutes before the target time
+ * and one nudge at the target time, each only if stage 1 isn't out yet.
+ * Called by the scheduled tick; marks a reminder sent before sending it so a
+ * retried tick can't double-DM.
+ */
+async function runOrderReminders(bot, now = orderWindow.nowSgt()) {
+  const [schedule, window, reminders] = await Promise.all([
+    orderWindow.getSchedule(),
+    orderWindow.getWindow(),
+    stateStore.get(stateStore.KEYS.orderReminders(), null),
+  ]);
+
+  const action = orderWindow.reminderAction({ now, postTime: schedule.postTime, window, reminders });
+
+  if (!action) {
+    return null;
+  }
+
+  await orderWindow.markReminderSent(action, now);
+
+  const when = orderWindow.formatClock(schedule.postTime);
+  const text = action === 'remind'
+    ? `⏰ Tonight's orders are due to go out at ${when} (in ${orderWindow.REMINDER_LEAD_MINUTES} minutes). `
+      + 'Check the menu and stock, then tap below to post the "orders open" message.'
+    : `⏰ It's ${when} - tonight's orders haven't been posted yet. Tap below to open ordering.`;
+
+  for (const adminId of googleSheets.getAdminIds()) {
+    try {
+      await bot.sendMessage(adminId, text, {
+        reply_markup: { inline_keyboard: [[{ text: '📣 Post orders now', callback_data: CALLBACKS.STAGE1_POST }]] },
+      });
+    } catch (error) {
+      log('warn', 'order_reminder_failed', { admin_id: adminId, error: error.message });
+    }
+  }
+
+  return action;
+}
+
+/**
+ * Close stage 1 once its cutoff has passed: the post is edited to say ordering
+ * is closed and loses its button. Customers are already refused at the cutoff
+ * itself (orderWindow.isOrderingOpen); this just makes the channel say so.
+ */
+async function enforceOrderCutoff(bot) {
+  const window = await orderWindow.getWindow();
+
+  if (!orderWindow.isPastCutoff(window)) {
+    return { skipped: 'not_due' };
+  }
+
+  if (!await orderWindow.closeStageOne()) {
+    return { skipped: 'already_closed' };
+  }
+
+  const result = await refreshPreorderPost(bot);
+  await refreshDeliveryModeMenus(bot).catch(() => {});
+  return { closed: true, post: result };
+}
+
+function formatScheduleText(schedule) {
+  return '⏰ Order Schedule\n\n'
+    + `• Target post time: ${orderWindow.formatClock(schedule.postTime)} `
+    + `(admins are reminded ${orderWindow.REMINDER_LEAD_MINUTES} min before)\n`
+    + `• Order cutoff: ${orderWindow.formatClock(schedule.cutoffTime)} (ordering stops sharply)\n\n`
+    + 'Times are Singapore time.';
+}
+
+function scheduleKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '✏️ Edit target post time', callback_data: CALLBACKS.ORDER_SCHEDULE_EDIT_POST }],
+      [{ text: '✏️ Edit order cutoff', callback_data: CALLBACKS.ORDER_SCHEDULE_EDIT_CUTOFF }],
+      [{ text: '← Back', callback_data: CALLBACKS.ADMIN_SETTINGS }],
+    ],
+  };
+}
+
+async function showOrderSchedule(bot, chatId, userId, status = null) {
+  const schedule = await orderWindow.getSchedule();
+  await updateMenuMessage(
+    bot, chatId, userId,
+    formatScheduleText(schedule) + (status ? `\n\n${status}` : ''),
+    scheduleKeyboard()
+  );
+}
+
+/** The admin's typed reply to an "Edit target post time / cutoff" prompt. */
+async function handleScheduleInput(bot, chatId, userId, text, state, messageId) {
+  const time = orderWindow.parseClock(text);
+
+  if (!time) {
+    await bot.sendMessage(chatId, '❌ I could not read that time. Try something like 6pm, 6:30 PM or 18:00.');
+    return true;
+  }
+
+  const isPostTime = state === STATES.EDIT_POST_TIME;
+  await orderWindow.setSchedule(isPostTime ? { postTime: time } : { cutoffTime: time });
+  await clearAdminState(userId);
+
+  try {
+    await bot.deleteMessage(chatId, messageId);
+  } catch (error) {
+    log('warn', 'schedule_input_delete_failed', { error: error.message });
+  }
+
+  let status = `✅ Saved - ${isPostTime ? 'target post time' : 'order cutoff'} is now ${orderWindow.formatClock(time)}.`;
+
+  // A cutoff change applies to the round that is live right now, and the
+  // channel post shows it, so refresh that too.
+  if (!isPostTime && await orderWindow.recomputeCutoff(time)) {
+    await refreshPreorderPost(bot);
+    status += ' The live orders post has been updated.';
+  }
+
+  await showOrderSchedule(bot, chatId, userId, status);
+  return true;
+}
+
+
+// --- Stage 2: confirm stock, then post spare stock -----------------------------
+
+async function getStagePanel() {
+  return stateStore.get(stateStore.KEYS.stagePanel(), null);
+}
+
+async function setStagePanel(value) {
+  return stateStore.set(stateStore.KEYS.stagePanel(), value, { ttlMs: 2 * 60 * 60 * 1000 });
+}
+
+function buildStagePanelText(items, adjust) {
+  const lines = items.map(item => {
+    const { total, sold, remaining } = orderWindow.stockFigures(item, adjust);
+    return `• ${item.name}\n   total ${total} · sold ${sold} · remaining ${remaining}`;
+  });
+
+  return '📣 Confirm stock before posting spare stock\n\n'
+    + (lines.length ? lines.join('\n') : 'No menu items.')
+    + '\n\n"Sold" is what stage-1 orders took. Tap an item to change its total, '
+    + 'or confirm to post the remaining stock to the channel.';
+}
+
+function buildStagePanelKeyboard(items) {
+  return {
+    inline_keyboard: [
+      ...items.map(item => [{
+        text: `✏️ ${item.name}`,
+        callback_data: `${CALLBACKS.STAGE2_EDIT_PREFIX}${item.id}`,
+      }]),
+      [{ text: '✅ Confirm & post', callback_data: CALLBACKS.STAGE2_CONFIRM }],
+      [{ text: '✖️ Cancel', callback_data: CALLBACKS.STAGE2_CANCEL }],
+    ],
+  };
+}
+
+async function renderStagePanel(bot, chatId, userId) {
+  const panel = await getStagePanel();
+  const items = await menuStore.getFoodItemsOrThrow();
+  await updateMenuMessage(
+    bot, chatId, userId,
+    buildStagePanelText(items, panel ? panel.adjust : {}),
+    buildStagePanelKeyboard(items)
+  );
+}
+
+/**
+ * The Delivery Mode "Confirm stock & post" button (and /skip at that stage):
+ * show the stock screen instead of posting straight away.
+ *
+ * If stage 1 was never posted this round, nothing has reset last round yet, so
+ * that happens first - otherwise the totals here would be last night's.
+ */
+async function showStageTwoPanel(bot, chatId, userId, hallId, answer) {
+  const window = await orderWindow.getWindow();
+
+  if (window && window.stage === orderWindow.STAGES.STAGE2) {
+    await answer('Spare stock has already been posted.', { show_alert: true });
+    return true;
+  }
+
+  try {
+    if (!window) {
+      await resetRoundBeforePreorder(bot, chatId);
+      await orderWindow.setWindow({ stage: orderWindow.STAGES.CLOSED, postedAt: null, cutoffAt: null });
+    }
+
+    await setStagePanel({ hallId, adjust: {} });
+    await clearAdminState(userId);
+    await renderStagePanel(bot, chatId, userId);
+  } catch (error) {
+    if (!isTemporarilyUnavailable(error)) {
+      throw error;
+    }
+    await answer('Could not read the menu. Try again in a moment.', { show_alert: true });
+    return true;
+  }
+
+  await answer();
+  return true;
+}
+
+/** The admin's typed new total for one item on the confirm-stock screen. */
+async function handleStageTwoStockInput(bot, chatId, userId, text, state, messageId) {
+  const trimmed = String(text || '').trim();
+
+  if (!/^\d+$/.test(trimmed)) {
+    await bot.sendMessage(chatId, '❌ Please type a whole number, like 12.');
+    return true;
+  }
+
+  const total = Number.parseInt(trimmed, 10);
+  const panel = await getStagePanel();
+  const items = await menuStore.getFoodItems();
+  const item = items.find(entry => entry.id === state.foodItemId);
+
+  if (!panel || !item) {
+    await clearAdminState(userId);
+    await bot.sendMessage(chatId, 'That screen has expired - open Delivery Mode again.');
+    return true;
+  }
+
+  const { sold, hasBaseline } = orderWindow.stockFigures(item, panel.adjust);
+
+  if (total < sold) {
+    await bot.sendMessage(
+      chatId,
+      `❌ ${total} is too low - ${sold} of ${item.name} ${sold === 1 ? 'was' : 'were'} already sold in stage 1. `
+      + `Type a new total (at least ${sold}).`
+    );
+    return true;
+  }
+
+  const saved = await menuStore.setRemainingStock(item.id, total - sold);
+
+  if (!saved.success) {
+    await bot.sendMessage(chatId, `${saved.message}\n\nType the total for ${item.name} again.`);
+    return true;
+  }
+
+  if (hasBaseline) {
+    await setStagePanel({ ...panel, adjust: { ...panel.adjust, [item.id]: total - item.baselineStock } });
+  }
+
+  await clearAdminState(userId);
+
+  try {
+    await bot.deleteMessage(chatId, messageId);
+  } catch (error) {
+    log('warn', 'stage2_stock_input_delete_failed', { error: error.message });
+  }
+
+  await renderStagePanel(bot, chatId, userId);
+  return true;
+}
+
+async function handleStageCallbacks(bot, query, chatId, userId, data, answer) {
+  // --- stage 1 ---
+  if (data === CALLBACKS.STAGE1_POST) {
+    if (await orderWindow.getWindow()) {
+      await bot.sendMessage(
+        chatId,
+        '⚠️ Orders have already been posted for this round. Posting again starts a NEW round: '
+        + 'unpaid orders are closed and restocked, stock goes back to opening levels and halls reopen.',
+        {
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '✅ Start a new round', callback_data: CALLBACKS.STAGE1_POST_CONFIRM },
+              { text: '✖️ Cancel', callback_data: CALLBACKS.STAGE1_POST_CANCEL },
+            ]],
+          },
+        }
+      );
+      await answer();
+      return true;
+    }
+
+    return runStageOnePost(bot, chatId, answer);
+  }
+
+  if (data === CALLBACKS.STAGE1_POST_CONFIRM || data === CALLBACKS.STAGE1_POST_CANCEL) {
+    try {
+      await bot.deleteMessage(chatId, query.message.message_id);
+    } catch (error) {
+      log('warn', 'stage1_prompt_delete_failed', { error: error.message });
+    }
+
+    if (data === CALLBACKS.STAGE1_POST_CANCEL) {
+      await answer();
+      return true;
+    }
+
+    return runStageOnePost(bot, chatId, answer);
+  }
+
+  // --- Settings > Order Schedule ---
+  if (data === CALLBACKS.SETTINGS_ORDER_SCHEDULE) {
+    await clearAdminState(userId);
+    await showOrderSchedule(bot, chatId, userId);
+    await answer();
+    return true;
+  }
+
+  if (data === CALLBACKS.ORDER_SCHEDULE_EDIT_POST || data === CALLBACKS.ORDER_SCHEDULE_EDIT_CUTOFF) {
+    const isPostTime = data === CALLBACKS.ORDER_SCHEDULE_EDIT_POST;
+    await setAdminState(userId, isPostTime ? STATES.EDIT_POST_TIME : STATES.EDIT_CUTOFF_TIME);
+    await updateMenuMessage(
+      bot, chatId, userId,
+      `Send the new ${isPostTime ? 'target post time' : 'order cutoff'}, e.g. ${isPostTime ? '6pm or 18:00' : '12:30am or 00:30'}.`,
+      { inline_keyboard: [[{ text: '← Back', callback_data: CALLBACKS.SETTINGS_ORDER_SCHEDULE }]] }
+    );
+    await answer();
+    return true;
+  }
+
+  // --- stage 2 ---
+  if (isCallbackType(data, CALLBACKS.STAGE2_EDIT_PREFIX)) {
+    const foodItemId = Number.parseInt(extractCallbackValue(data, CALLBACKS.STAGE2_EDIT_PREFIX), 10);
+    const panel = await getStagePanel();
+    const item = (await menuStore.getFoodItems()).find(entry => entry.id === foodItemId);
+
+    if (!panel || !item) {
+      await answer('This screen is outdated - open Delivery Mode again.', { show_alert: true });
+      return true;
+    }
+
+    const { total, sold, remaining } = orderWindow.stockFigures(item, panel.adjust);
+    await setAdminState(userId, { mode: STATES.EDIT_STAGE2_STOCK, foodItemId });
+    await updateMenuMessage(
+      bot, chatId, userId,
+      `✏️ ${item.name}\ntotal ${total} · sold ${sold} · remaining ${remaining}\n\n`
+      + `Type the new TOTAL stock (at least ${sold}, what is already sold).`,
+      { inline_keyboard: [[{ text: '← Back', callback_data: CALLBACKS.STAGE2_BACK }]] }
+    );
+    await answer();
+    return true;
+  }
+
+  if (data === CALLBACKS.STAGE2_BACK) {
+    await clearAdminState(userId);
+
+    if (!await getStagePanel()) {
+      await answer('This screen is outdated - open Delivery Mode again.', { show_alert: true });
+      return true;
+    }
+
+    await renderStagePanel(bot, chatId, userId);
+    await answer();
+    return true;
+  }
+
+  if (data === CALLBACKS.STAGE2_CANCEL) {
+    await clearAdminState(userId);
+    await stateStore.remove(stateStore.KEYS.stagePanel());
+    await showDeliveryModeMenu(bot, chatId, userId);
+    await answer();
+    return true;
+  }
+
+  if (data === CALLBACKS.STAGE2_CONFIRM) {
+    const panel = await getStagePanel();
+
+    if (!panel) {
+      await answer('This screen is outdated - open Delivery Mode again.', { show_alert: true });
+      return true;
+    }
+
+    await clearAdminState(userId);
+
+    const posted = await performDeliveryPost(
+      bot, query, chatId,
+      `${CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX}preorder:${panel.hallId}`
+    );
+
+    if (posted.posted) {
+      await stateStore.remove(stateStore.KEYS.stagePanel());
+      await showDeliveryModeMenu(bot, chatId, userId);
+    }
+    return true;
+  }
+
+  return false;
+}
+
+
+/**
+ * A Delivery Mode post button. The first step (spare stock) goes through the
+ * confirm-stock screen; the rest post straight away.
+ */
 async function handleDeliveryPost(bot, query, chatId, userId, data) {
+  const [postMode, hallIdValue] = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX).split(':');
+
+  if (postMode === 'preorder') {
+    const answer = (text, options) => bot.answerCallbackQuery(query.id, { ...options, text });
+    return showStageTwoPanel(bot, chatId, userId, Number.parseInt(hallIdValue, 10), answer);
+  }
+
+  await performDeliveryPost(bot, query, chatId, data);
+  return true;
+}
+
+/** Post for a Delivery Mode button and answer the tap. Resolves { posted }. */
+async function performDeliveryPost(bot, query, chatId, data) {
   const [postMode, hallIdValue] = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_POST_CHANNEL_PREFIX).split(':');
   const hallId = Number.parseInt(hallIdValue, 10);
 
@@ -2543,7 +3123,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
     answered = true;
     await bot.answerCallbackQuery(
       query.id,
-      { text: postMode === 'preorder' ? 'Posted preorder availability to Dingo channel.' : `Posted to Dingo channel: ${text}` }
+      { text: postMode === 'preorder' ? 'Posted spare stock to Dingo channel.' : `Posted to Dingo channel: ${text}` }
     );
   };
 
@@ -2554,7 +3134,6 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
       locked: { text: 'A delivery update is already being posted.' },
       hall_not_found: { text: 'Hall not found', show_alert: true },
       stale: { text: 'This button is outdated. Please use the latest delivery menu.', show_alert: true },
-      reset_required: { text: "Last round hasn't been reset yet. Reset Halls and Orders before posting the preorder.", show_alert: true },
       no_channel: { text: 'DINGO_CHANNEL_ID is not set in the environment.', show_alert: true },
       send_failed: { text: 'Failed to post to the Dingo channel. Check the channel ID and bot permissions.', show_alert: true },
       sheets_unavailable: { text: 'Could not read the menu. Nothing was posted - try again in a moment.', show_alert: true },
@@ -2562,7 +3141,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
 
     timer.done();
     await bot.answerCallbackQuery(query.id, FAILURE_RESPONSES[result.reason] || { text: 'Could not post update.', show_alert: true });
-    return true;
+    return { posted: false };
   }
 
   if (!answered) {
@@ -2577,7 +3156,7 @@ async function handleDeliveryPost(bot, query, chatId, userId, data) {
   }
 
   timer.done();
-  return true;
+  return { posted: true };
 }
 
 /**
@@ -2786,12 +3365,50 @@ const SERVE_CUSTOMER_MESSAGE = {
   }`,
 };
 
+/** "📦 Dropped off" on one order within a customer's submenu: ask for the photo first. */
+async function handleSubmenuDropoffStart(bot, query, chatId, messageId, orderId) {
+  // Despite its name, getPendingOrder is a plain lookup by id.
+  const order = await orderStore.getPendingOrder(orderId);
+
+  if (!order || order.servedAt) {
+    await bot.answerCallbackQuery(query.id, { text: 'Order is already served or no longer active.' });
+    return true;
+  }
+
+  await stateStore.set(
+    stateStore.KEYS.awaitingDropoffPhoto(query.from.id),
+    {
+      hallName: order.hallName,
+      telegramUserId: order.userId,
+      customerChatId: order.chatId,
+      orderIds: [order.id],
+    },
+    { ttlMs: 15 * 60 * 1000 }
+  );
+
+  await bot.sendMessage(
+    chatId,
+    `📸 Send a photo showing where you left order ${order.code}:\n\n${formatOrderItems(order)}\n\n`
+    + "I'll forward it to the customer and mark the order dropped off."
+  );
+
+  await bot.answerCallbackQuery(query.id);
+  return true;
+}
+
 /** "✅ Served" / "📦 Dropped off" on one order within a customer's submenu. */
 async function handleServeMarkOrder(bot, query, chatId, messageId, data, kind) {
   const prefix = kind === 'served'
     ? CALLBACKS.DELIVERY_MODE_SERVE_MARK_SERVED_PREFIX
     : CALLBACKS.DELIVERY_MODE_SERVE_MARK_DROPPED_PREFIX;
   const orderId = extractCallbackValue(data, prefix);
+
+  // Every drop-off needs a photo of where the food was left, so this button
+  // only starts the same photo relay as the remaining-items screen, scoped to
+  // this one order. The order is marked once the photo arrives.
+  if (kind === 'dropped_off') {
+    return handleSubmenuDropoffStart(bot, query, chatId, messageId, orderId);
+  }
 
   const served = await orderStore.markOrderServed(orderId, query.from.id, { kind });
 
@@ -2998,56 +3615,6 @@ async function refreshDeliveryModeMenus(bot) {
   await refreshDeliveryModeMenusOnly(bot);
 }
 
-const FINISH_PROMPT_TEXT = '✅ Delivery finished. Tap below to reset halls when you are ready.';
-
-function resetPromptKeyboard(token) {
-  return {
-    inline_keyboard: [[{
-      text: '🔄 Reset Halls and Orders',
-      callback_data: `${CALLBACKS.DELIVERY_MODE_RESET_HALLS}:${token}`,
-    }]],
-  };
-}
-
-async function isCurrentResetToken(token) {
-  const current = await stateStore.get(stateStore.KEYS.resetToken(), null);
-  return Boolean(token) && current === token;
-}
-
-async function refuseOutdatedReset(bot, chatId, messageId, answer) {
-  await answer('This reset button is outdated. Use Finish Delivery again if you need to reset.', { show_alert: true });
-  try {
-    await bot.deleteMessage(chatId, messageId);
-  } catch (error) {
-    log('warn', 'reset_prompt_delete_failed', { error: error.message });
-  }
-  return true;
-}
-
-/**
- * "Reset Halls and Orders first", shown instead of the preorder button while
- * last round is still un-reset. Sends the usual reset prompt as its own
- * message (the confirm flow deletes the message it runs from, which must not
- * be the delivery menu), reusing Finish Delivery's token if one is still out
- * so that button keeps working too.
- */
-async function handleResetFirst(bot, chatId, answer) {
-  let token = await stateStore.get(stateStore.KEYS.resetToken(), null);
-
-  if (!token) {
-    token = crypto.randomUUID().slice(0, 12);
-    await stateStore.set(stateStore.KEYS.resetToken(), token);
-  }
-
-  await bot.sendMessage(
-    chatId,
-    "Last round hasn't been reset yet. Reset halls and orders before posting tonight's preorder:",
-    { reply_markup: resetPromptKeyboard(token) }
-  );
-  await answer();
-  return true;
-}
-
 /**
  * "📋 Serve list: Hall X" - (re)send a visited hall's serve list without
  * posting anything to the channel. The list is otherwise only created by that
@@ -3084,74 +3651,7 @@ async function handleServeListResend(bot, chatId, hallName, answer) {
   return true;
 }
 
-/**
- * First tap on "Reset Halls and Orders": spell out what it will do and ask
- * for a second, explicit tap. Reset closes every active order and rewrites
- * stock, so a stray tap must never be enough on its own.
- */
-async function handleResetPrompt(bot, chatId, messageId, token, answer) {
-  if (!await isCurrentResetToken(token)) {
-    return refuseOutdatedReset(bot, chatId, messageId, answer);
-  }
-
-  const orders = await orderStore.getActiveOrders();
-  const inReview = orders.filter(order => (
-    order.status === STATUS.PAYMENT_FLAGGED || order.status === STATUS.VERIFYING_PAYMENT
-  )).length;
-  const paid = orders.filter(order => order.status === STATUS.PAID).length;
-  const unpaid = orders.length - inReview - paid;
-
-  const lines = [
-    '⚠️ Reset halls and orders?',
-    '',
-    'This will:',
-    `• close ${unpaid} unpaid order(s) and return their stock`,
-    `• mark ${paid} paid but unserved order(s) as served`,
-    '• put stock back to its opening levels',
-    '• reopen ordering for every hall',
-  ];
-
-  if (inReview) {
-    lines.push('', `${inReview} order(s) with a payment awaiting review will be left open.`);
-  }
-
-  await editMessageTextSafely(bot, lines.join('\n'), {
-    chat_id: chatId,
-    message_id: messageId,
-    reply_markup: {
-      inline_keyboard: [[
-        { text: '✅ Yes, reset', callback_data: `${CALLBACKS.DELIVERY_MODE_RESET_CONFIRM_PREFIX}${token}` },
-        { text: '✖️ Cancel', callback_data: `${CALLBACKS.DELIVERY_MODE_RESET_CANCEL_PREFIX}${token}` },
-      ]],
-    },
-  });
-  await answer();
-  return true;
-}
-
-/**
- * Second tap: consume the token and reset. The lock makes check-and-consume
- * one step, so a double tap (or two admins) cannot run the reset twice.
- */
-async function handleResetConfirm(bot, chatId, messageId, token, answer) {
-  const holder = await stateStore.acquireLock(stateStore.LOCKS.deliveryReset(), { leaseMs: 120000 });
-
-  if (!holder) {
-    await answer('A reset is already running.');
-    return true;
-  }
-
-  try {
-    if (!await isCurrentResetToken(token)) {
-      return await refuseOutdatedReset(bot, chatId, messageId, answer);
-    }
-
-    await stateStore.remove(stateStore.KEYS.resetToken());
-    return await handleResetHallsAndOrders(bot, chatId, messageId, answer);
-  } finally {
-    await stateStore.releaseLock(stateStore.LOCKS.deliveryReset(), holder);
-  }
-}
+const FINISH_TEXT ='✅ Delivery finished. Halls and orders will reset automatically when the next preorder is posted.';
 
 /**
  * Reset for a new delivery round: close out anything still active from the
@@ -3159,22 +3659,10 @@ async function handleResetConfirm(bot, chatId, messageId, token, answer) {
  * per-hall serve caches so the delivery menu and "we are here" lists start
  * clean instead of carrying over whatever the sequencer/cache last held.
  *
- * Previously this only cleared hall blocks, leaving the sequencer wherever
- * automation last advanced it - Finish Delivery is what resets that, and
- * tapping an old Reset Halls button instead of a fresh one skipped it,
- * leaving the next round starting mid-sequence instead of at the first hall.
+ * Runs automatically as the preorder post goes out (see postDingoUpdate), so
+ * it never asks for confirmation. Returns the summary text for the admins.
  */
-async function handleResetHallsAndOrders(bot, chatId, messageId, answer) {
-  // Delete the "Reset Halls and Orders" prompt itself first, before doing any
-  // of the (multi-step, non-instant) reset work below - otherwise the button
-  // stays tappable the whole time and a second tap re-runs this from scratch
-  // (closing "leftover" orders again, reapplying stock baselines twice, etc).
-  try {
-    await bot.deleteMessage(chatId, messageId);
-  } catch (error) {
-    log('warn', 'reset_halls_prompt_delete_failed', { error: error.message });
-  }
-
+async function runRoundReset(bot) {
   const leftoverOrders = await orderStore.getActiveOrders();
   const closedSummaries = [];
   const awaitingReview = [];
@@ -3200,6 +3688,16 @@ async function handleResetHallsAndOrders(bot, chatId, messageId, answer) {
     }
   }
 
+  // Orders already handed over before their payment cleared. They are no
+  // longer active, so they are looked up separately; best-effort, the reset
+  // must not fail because of a summary line.
+  let servedUnpaid = [];
+  try {
+    servedUnpaid = await orderStore.getRecentServedUnpaidOrders();
+  } catch (error) {
+    log('warn', 'reset_served_unpaid_lookup_failed', { error: error.message });
+  }
+
   // Put stock back to whatever an admin last manually set it to (see
   // menuStore.updateFoodItemStock), undoing the night's consumption - not a
   // running "add back what was rejected" total, the actual opening number. One
@@ -3218,10 +3716,14 @@ async function handleResetHallsAndOrders(bot, chatId, messageId, answer) {
   await orderStore.clearBlockedHalls();
   await refreshPreorderPostAfterStockChange(bot, stockChanges);
   await refreshDeliveryModeMenus(bot);
-  await answer('✅ Halls and orders have been reset.');
 
   const closedText = closedSummaries.length
     ? `\n\nClosed leftover orders:\n${closedSummaries.join('\n')}`
+    : '';
+
+  const servedUnpaidText = servedUnpaid.length
+    ? '\n\n💸 Served but never paid (reconcile if needed):\n'
+      + servedUnpaid.map(order => `🏢 ${order.hallName}: ${order.code} - ${orderActions.describeCustomer(order)}`).join('\n')
     : '';
 
   const stockText = stockChanges.length
@@ -3236,18 +3738,47 @@ async function handleResetHallsAndOrders(bot, chatId, messageId, answer) {
     ? `\n\n⚠️ No starting stock recorded for: ${noBaselineItems.join(', ')} - left unchanged.`
     : '';
 
-  await bot.sendMessage(
-    chatId,
-    '✅ Halls and orders have been reset. Orders are now available to be placed by any hall, '
-    + `starting from ${halls[0] ? halls[0].name : 'the first hall'}.${closedText}${reviewText}${stockText}${noBaselineText}`
-  );
-
-  // The summary above landed below the delivery menu. Reset is tapped in the
-  // admin's own private chat, where the chat id is their user id.
-  await bringDeliveryMenuToBottom(bot, chatId, chatId);
-
-  return true;
+  return '✅ Halls and orders were reset for the new round. Orders are now available to be placed by any hall, '
+    + `starting from ${halls[0] ? halls[0].name : 'the first hall'}.`
+    + `${closedText}${servedUnpaidText}${reviewText}${stockText}${noBaselineText}`;
 }
+
+/**
+ * The reset as the preorder post triggers it: under the reset lock (so two
+ * posts racing can't both run it), then the summary goes to the admin who
+ * triggered the post, or to every admin when nobody did (the cron tick).
+ * A failure is logged and swallowed - a half-reset must not stop tonight's
+ * preorder from going out, and the summary says nothing false about it.
+ */
+async function resetRoundBeforePreorder(bot, notifyChatId) {
+  const holder = await stateStore.acquireLock(stateStore.LOCKS.deliveryReset(), { leaseMs: 120000 });
+
+  if (!holder) {
+    return;
+  }
+
+  let summary;
+  try {
+    summary = await runRoundReset(bot);
+  } catch (error) {
+    log('error', 'round_reset_failed', { error: error.message });
+    summary = `⚠️ The automatic reset for the new round failed (${error.message}). `
+      + 'The preorder was still posted - some orders or stock may not have been reset.';
+  } finally {
+    await stateStore.releaseLock(stateStore.LOCKS.deliveryReset(), holder);
+  }
+
+  const recipients = notifyChatId ? [notifyChatId] : googleSheets.getAdminIds();
+
+  for (const recipient of recipients) {
+    try {
+      await bot.sendMessage(recipient, summary);
+    } catch (error) {
+      log('warn', 'round_reset_summary_failed', { error: error.message, chat_id: recipient });
+    }
+  }
+}
+
 
 async function handleFinishDelivery(bot, query, chatId, userId) {
   await bot.answerCallbackQuery(query.id);
@@ -3278,12 +3809,7 @@ async function handleFinishDelivery(bot, query, chatId, userId) {
 
   await clearDeliveryModeViewer(userId);
 
-  // A fresh token per Finish: any reset button from an earlier Finish (or a
-  // second Finish tap) stops working, so only the newest one can reset.
-  const token = crypto.randomUUID().slice(0, 12);
-  await stateStore.set(stateStore.KEYS.resetToken(), token);
-
-  await bot.sendMessage(chatId, FINISH_PROMPT_TEXT, { reply_markup: resetPromptKeyboard(token) });
+  await bot.sendMessage(chatId, FINISH_TEXT);
 
   await showMainAdminMenu(bot, chatId, userId);
   return true;
@@ -3294,9 +3820,15 @@ module.exports = {
   handleAdminCallback,
   handleSkipCommand,
   handleStatusCommand,
-  handleResetPrompt,
-  handleResetConfirm,
-  handleResetFirst,
+  runRoundReset,
+  resetRoundBeforePreorder,
+  postStageOne,
+  runOrderReminders,
+  enforceOrderCutoff,
+  showStageTwoPanel,
+  handleStageCallbacks,
+  handleStageTwoStockInput,
+  handleScheduleInput,
   handleServeListResend,
   refreshPreorderPost,
   refreshHallServeOrdersMessage,

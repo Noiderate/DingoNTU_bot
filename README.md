@@ -87,19 +87,46 @@ screenshots are read automatically and either approved or sent to an admin.
 - **Manage Admins** — add, remove, and choose which admin is tagged in preorder posts
 - **Manage Food Items** — add, delete, edit stock for one item or all of them
 - **Manage Halls** — add and delete pickup halls
-- **Edit Dingo Post** — replace the preorder post's first line (`{hall}` fills
-  in the hall name) and optionally attach a photo, which turns the post into
-  that photo with the text as its caption. Nothing set = the default post.
+- **Edit Dingo Post** — replace the stage-1 "orders open" post's first line
+  (`{hall}` fills in the hall name) and optionally attach a photo, which turns
+  the post into that photo with the text as its caption. Nothing set = the
+  default post.
+- **Order Schedule** — the target time for the "orders open" post (default
+  6:00 PM) and the order cutoff (default 12:30 AM), both Singapore time.
+- **Post Orders Open** — posts stage 1 (below); also offered by the reminder DM.
 - **Delivery Mode** — the announcement sequencer and per-hall serve lists
 - **Stats** / **Reload Settings**
 
 Payment Accept/Reject for flagged receipts arrives as direct messages.
 The legacy order Confirm/Reject code is preserved but bypassed for new orders.
 
+### Ordering stages
+
+A delivery night has two ordering stages (`src/services/orderWindow.js`):
+
+1. **Orders open.** About 30 minutes before the target post time every admin gets
+   a DM reminder (and one nudge at the target time if it still isn't posted) with
+   a **Post orders now** button; the main admin menu has the same button. Posting
+   it wraps up last round (see the reset below), then posts the menu with
+   "order before 12:30 AM". At the cutoff the scheduled tick edits that post to
+   "Ordering is now closed" and removes its button; customers are refused at the
+   cutoff itself, even if the tick is late. Orders already confirmed can still pay.
+2. **Spare stock.** Once the drivers have left, **Confirm stock & post** (the first
+   button in Delivery Mode) opens a screen listing each item's total, sold in
+   stage 1 and remaining stock. Tap an item to change its total (it can't be
+   lower than what is already sold; the change is for tonight only), then
+   **Confirm & post**: the "ordering closed" post is deleted and the spare-stock
+   post goes up. Ordering stays closed between the cutoff and this post.
+
+If stage 1 was never posted, opening the stock screen runs the reset first.
+The reminders and the cutoff run off the scheduled tick (`/api/cron/tick`), so
+it must be running around those times.
+
 ### Delivery mode
 
 Walks each hall through `preorder → coming → here`, then `get ready` for the next
-hall, posting to `DINGO_CHANNEL_ID` and deleting superseded posts.
+hall, posting to `DINGO_CHANNEL_ID` and deleting superseded posts. The `preorder`
+step is the stage-2 spare-stock post above.
 
 **Only `we are here` is a manual tap.** `get ready` and `coming` post themselves,
 driven by how far the *current* hall has gotten through its "tap each order when
@@ -118,13 +145,15 @@ Closing a hall never touches a customer already mid-payment - only carts that
 were never confirmed into an order get cleared, with a message explaining why.
 The very last hall in the list never triggers this (there's no genuine "next
 hall" for it); the admin ends the night with **Finish Delivery** instead, which
-clears the channel posts and resets the sequencer. Finish Delivery is offered
+clears the channel posts and the delivery menu. Finish Delivery is offered
 once every hall is closed or the last hall's "we are here" has posted (so
-reverting a hall at the end of the night can't strand the menu). Its **Reset
-Halls and Orders** button asks for confirmation and only works once, for the
-latest Finish - an old leftover button can't wipe a later night. Until that
-reset has run (or while any hall is still closed), the preorder post is
-refused and its button is replaced by **Reset Halls and Orders first**.
+reverting a hall at the end of the night can't strand the menu). There is no
+manual reset: posting stage 1 ("orders open") resets last round automatically - leftover
+unpaid orders are closed and restocked, paid-but-unserved ones are marked served,
+stock returns to its opening levels, closed halls reopen and the sequencer rewinds.
+Orders with a payment still under review are left open. A summary (including orders
+served before payment cleared) goes to the admin who posted, or to every admin when
+the scheduled tick posted it.
 
 Halls the delivery has already passed that still have unserved orders (a late
 order, or one placed after **Revert**) get a **📋 Serve list** button in the
@@ -132,7 +161,7 @@ delivery menu, which brings back that hall's serve list without posting to the
 channel. Only the hall the next automatic post is waiting on can trigger it -
 serving at an earlier hall never fires the current hall's get-ready/coming.
 
-`Revert last blocked hall` and `Reset Halls` remain as manual overrides if the
+`Revert last blocked hall` remains a manual override if the
 automatic closure needs undoing. **`/skip`**, sent by any admin, force-posts
 whatever the sequencer currently has queued next - get ready, coming, or here -
 regardless of serve progress. It's the manual override for when the automatic
@@ -275,7 +304,7 @@ npm run menu:import
 
 It refuses to run if the menu already has items (`-- --replace` wipes and
 re-imports), skips duplicate names, and records each item's current stock as its
-opening stock, which "Reset Halls and Orders" restores. From then on the tab is a
+opening stock, which the automatic round reset restores. From then on the tab is a
 read-only mirror: change food, prices and stock in the bot under Settings >
 Manage Food Items. Until items exist, the mirror deliberately leaves the tab
 alone.

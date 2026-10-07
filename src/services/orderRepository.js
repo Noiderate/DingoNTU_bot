@@ -404,6 +404,26 @@ async function getActiveOrdersByHall(hallName) {
   );
 }
 
+/**
+ * Orders served (or dropped off) while their payment was still unconfirmed,
+ * since the given time. They leave the active set the moment they are served,
+ * so the round-reset summary has to ask for them explicitly.
+ */
+async function getServedUnpaidOrdersSince(sinceIso) {
+  const supabase = getSupabase();
+
+  return unwrap(
+    await supabase
+      .from('orders')
+      .select(ORDER_SELECT)
+      .eq('status', STATUS.SERVED)
+      .is('paid_at', null)
+      .gte('served_at', sinceIso)
+      .order('served_at', { ascending: true }),
+    'getServedUnpaidOrdersSince'
+  );
+}
+
 /** One page of a customer's own order history, newest first. */
 async function getOrdersForCustomer(telegramUserId, { limit = 5, offset = 0 } = {}) {
   const supabase = getSupabase();
@@ -942,6 +962,7 @@ module.exports = {
   getActiveOrders,
   getActiveOrdersByHall,
   getOrdersForHallServeProgress,
+  getServedUnpaidOrdersSince,
   getOrdersForCustomer,
   getOrderAwaitingPaymentFor,
   getExpiredUnpaidOrders,

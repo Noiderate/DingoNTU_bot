@@ -30,7 +30,7 @@ function mockPost(t, { custom = null, post = LIVE_TEXT_POST, foodItems = [{ id: 
 }
 
 test('with nothing custom, the intro is the usual default line', () => {
-  assert.equal(admin.buildPreorderIntro('H12', null), 'Preorders available for H12 onwards');
+  assert.equal(admin.buildPreorderIntro('H12', null), '🍱 Hall delivery orders are now open!');
 });
 
 test('custom text replaces the intro, fills in {hall}, and is HTML-escaped', () => {
@@ -83,7 +83,7 @@ test('attaching a photo replaces the text post with a photo post, caption = the 
   assert.deepEqual(result, { reposted: true });
   assert.equal(photos[0].chatId, 'chan1');
   assert.equal(photos[0].fileId, 'photo-1');
-  assert.match(photos[0].opts.caption, /^Preorders available for H12 onwards/);
+  assert.match(photos[0].opts.caption, /^🍱 Hall delivery orders are now open!/);
   assert.deepEqual(deleted, [111]);
 
   const recorded = stored.find(entry => entry.key === stateStore.KEYS.preorderPost());
@@ -124,7 +124,7 @@ test('removing the photo turns the live post back into a text post', async t => 
   const result = await admin.refreshPreorderPost(bot);
 
   assert.deepEqual(result, { reposted: true });
-  assert.match(sent[0], /^Preorders available for H12 onwards/);
+  assert.match(sent[0], /^🍱 Hall delivery orders are now open!/);
 });
 
 test('a non-admin photo is never taken as the preorder photo', async t => {

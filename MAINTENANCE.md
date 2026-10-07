@@ -577,7 +577,7 @@ statement that locks the rows, checks that *every* item has enough, and only the
 deducts - so two customers confirming the last item cannot both get it, a cart
 with one short item deducts nothing at all, and nobody queues behind anybody
 else. Stock also cannot go below zero: `menu_items.stock` has a `check (stock >=
-0)`. Restocking (`restore_menu_stock`) and the "Reset Halls and Orders" baseline
+0)`. Restocking (`restore_menu_stock`) and the automatic round-reset baseline
 restore (`restore_menu_baselines`) are single statements too.
 
 The one lock left in checkout is **per customer** (`order:confirm:<telegram id>`,

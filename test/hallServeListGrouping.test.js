@@ -188,7 +188,29 @@ test('handleServeCustomerOpen falls back to the list when the customer has nothi
   assert.match(toasts[0].text, /no orders left/i);
 });
 
-test('handleServeMarkOrder: served sends the "handed to you" message and dropped off sends the "come collect" message', async t => {
+test('handleServeMarkOrder: dropped off only asks for a photo and does not mark the order yet', async t => {
+  const marked = [];
+  const pending = [];
+  t.mock.method(orderStore, 'markOrderServed', async (...args) => { marked.push(args); return null; });
+  t.mock.method(orderStore, 'getPendingOrder', async () => makeOrder({ id: 'order-2', code: 'DG2' }));
+  t.mock.method(stateStore, 'set', async (key, value) => { pending.push({ key, value }); });
+
+  const sent = [];
+  const bot = {
+    async sendMessage(chatId, text) { sent.push({ chatId, text }); },
+    async answerCallbackQuery() {},
+  };
+
+  await admin.handleServeMarkOrder(bot, { id: 'q2', from: { id: 9 }, message: { chat: { id: 555 } } }, 555, 999, 'dmsd_order-2', 'dropped_off');
+
+  assert.equal(marked.length, 0);
+  assert.equal(pending.length, 1);
+  assert.deepEqual(pending[0].value.orderIds, ['order-2']);
+  assert.equal(pending[0].value.customerChatId, 1);
+  assert.match(sent[0].text, /Send a photo/i);
+});
+
+test('handleServeMarkOrder: served sends the "handed to you" message', async t => {
   t.mock.method(orderStore, 'markOrderServed', async (orderId, adminId, opts) => ({
     id: orderId, code: 'DG1', chatId: 1, userId: 1, hallName: 'Hall A', wasUnpaid: false, kind: opts.kind,
   }));
@@ -208,10 +230,6 @@ test('handleServeMarkOrder: served sends the "handed to you" message and dropped
 
   await admin.handleServeMarkOrder(bot, { id: 'q1', from: { id: 9 }, message: { chat: { id: 555 } } }, 555, 999, 'dmss_order-1', 'served');
   assert.match(sent[0].text, /handed to you/i);
-
-  sent.length = 0;
-  await admin.handleServeMarkOrder(bot, { id: 'q2', from: { id: 9 }, message: { chat: { id: 555 } } }, 555, 999, 'dmsd_order-2', 'dropped_off');
-  assert.match(sent[0].text, /come collect/i);
 });
 
 test('handleServeMarkOrder returns to the customer submenu when they still have other orders left', async t => {

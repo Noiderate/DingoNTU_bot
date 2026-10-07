@@ -5,7 +5,10 @@ const { processQueue } = require('./paymentVerifier');
 const { drainOutbox, reconcile } = require('./sheetMirror');
 const { refreshTodaySheet } = require('./todaySheet');
 const { syncMenuToSheet } = require('./menuSheetSync');
-const { refreshPreorderPost, refreshHallServeOrdersMessage, refreshDeliveryModeMenus } = require('../handlers/admin');
+const {
+  refreshPreorderPost, refreshHallServeOrdersMessage, refreshDeliveryModeMenus,
+  enforceOrderCutoff, runOrderReminders,
+} = require('../handlers/admin');
 const { ensureAdminIdsLoaded } = require('./googleSheets');
 const repo = require('./orderRepository');
 const orderStore = require('./orderStore');
@@ -85,6 +88,34 @@ async function runRefreshTodaySheet() {
  */
 async function runSyncMenuSheet() {
   return syncMenuToSheet();
+}
+
+/**
+ * Stage 1's clock: close ordering at the cutoff, and remind the admins to post
+ * the "orders open" message (30 min before the target time, then a nudge).
+ * Both are cheap no-ops except in the minutes they are due.
+ */
+async function runOrderWindow() {
+  const bot = getBot();
+  await ensureAdminIdsLoaded();
+
+  const results = {};
+
+  try {
+    results.cutoff = await enforceOrderCutoff(bot);
+  } catch (error) {
+    results.cutoff = { error: error.message };
+    log('error', 'order_cutoff_failed', { error: error.message });
+  }
+
+  try {
+    results.reminder = await runOrderReminders(bot);
+  } catch (error) {
+    results.reminder = { error: error.message };
+    log('error', 'order_reminder_job_failed', { error: error.message });
+  }
+
+  return results;
 }
 
 /**
@@ -207,6 +238,7 @@ async function runTick({ deadline = Date.now() + config.worker.cronTimeBudgetMs 
     ['sheet', () => runDrainSheetOutbox(deadline)],
     ['todaySheet', () => runRefreshTodaySheet()],
     ['menuSheet', () => runSyncMenuSheet()],
+    ['orderWindow', () => runOrderWindow()],
     ['preorder', () => runRefreshPreorder()],
     ['sweep', () => runSweep()],
   ];
@@ -279,5 +311,6 @@ module.exports = {
   runRefreshTodaySheet,
   runSyncMenuSheet,
   runRefreshPreorder,
+  runOrderWindow,
   runSweep,
 };

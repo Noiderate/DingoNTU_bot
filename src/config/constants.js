@@ -62,15 +62,26 @@ const CALLBACKS = {
   DELIVERY_MODE_SERVE_REMAINING_PREFIX: 'dmsr_',  // {hallName} -> collated remaining items + customer list
   DELIVERY_MODE_SERVE_DROPOFF_PREFIX: 'dmsp_',    // {hallName}|{telegramUserId} -> start the drop-off photo relay
   DELIVERY_MODE_SERVE_LIST_PREFIX: 'dmsl_',       // {hallName} -> (re)send that hall's serve list, no channel post
-  // Shown in place of the preorder button until last round has been reset.
+  // Legacy reset buttons: the reset is automatic now, these only answer taps on old messages.
   DELIVERY_MODE_RESET_FIRST: 'delivery_mode_reset_first',
   DELIVERY_MODE_REVERT_BLOCK: 'delivery_mode_revert_block',
   DELIVERY_MODE_FINISH: 'delivery_mode_finish',
-  // Reset flow, each carrying Finish Delivery's one-time token after a colon:
-  // the first tap asks "are you sure", the second actually resets.
   DELIVERY_MODE_RESET_HALLS: 'delivery_mode_reset_halls',
   DELIVERY_MODE_RESET_CONFIRM_PREFIX: 'dm_reset_yes:',
   DELIVERY_MODE_RESET_CANCEL_PREFIX: 'dm_reset_no:',
+  // Stage 1 (orders open): posted from the reminder DM or the main admin menu.
+  STAGE1_POST: 'stage1_post',
+  STAGE1_POST_CONFIRM: 'stage1_post_yes',
+  STAGE1_POST_CANCEL: 'stage1_post_no',
+  // Stage 2 (spare stock): the confirm-stock screen opened by the Delivery Mode button.
+  STAGE2_EDIT_PREFIX: 's2e_',           // {foodItemId} -> type a new total for that item
+  STAGE2_BACK: 's2_back',
+  STAGE2_CONFIRM: 's2_confirm',
+  STAGE2_CANCEL: 's2_cancel',
+  // Settings > Order Schedule.
+  SETTINGS_ORDER_SCHEDULE: 'settings_order_schedule',
+  ORDER_SCHEDULE_EDIT_POST: 'osch_post',
+  ORDER_SCHEDULE_EDIT_CUTOFF: 'osch_cutoff',
 };
 
 /**
@@ -84,6 +95,9 @@ const STATES = {
   ADD_HALL: 'add_hall',
   EDIT_PREORDER_TEXT: 'edit_preorder_text',
   ATTACH_PREORDER_PHOTO: 'attach_preorder_photo',
+  EDIT_POST_TIME: 'edit_post_time',
+  EDIT_CUTOFF_TIME: 'edit_cutoff_time',
+  EDIT_STAGE2_STOCK: 'edit_stage2_stock',
 };
 
 /**

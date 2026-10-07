@@ -209,6 +209,29 @@ async function updateFoodItemStock(id, newStock) {
 }
 
 /**
+ * Set an item's remaining stock for tonight only. Unlike updateFoodItemStock
+ * this leaves the reset baseline alone, so a stage-2 adjustment doesn't carry
+ * over to the next round.
+ */
+async function setRemainingStock(id, newStock) {
+  try {
+    const rows = unwrap(
+      await getSupabase().from('menu_items').update({ stock: newStock }).eq('id', id).select('name'),
+      'menuStore.setRemainingStock'
+    );
+
+    if (!rows.length) {
+      return { success: false, message: '✗ That food item no longer exists.' };
+    }
+
+    return { success: true, message: `✓ Stock for "${rows[0].name}" set to ${newStock}.` };
+  } catch (error) {
+    console.error('Error setting remaining stock:', error.message);
+    return { success: false, message: `✗ Failed to update stock: ${error.message}` };
+  }
+}
+
+/**
  * Deduct stock for a checkout: all items or none, atomically, in the database.
  *
  * entries are { foodId, quantity }. Resolves to
@@ -304,6 +327,7 @@ module.exports = {
   deleteFoodItem,
   updateFoodItemPrice,
   updateFoodItemStock,
+  setRemainingStock,
   deductStock,
   restoreStock,
   restoreStockBaselines,
