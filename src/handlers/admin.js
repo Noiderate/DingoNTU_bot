@@ -22,7 +22,9 @@ const cartStore = require('../services/cartStore');
 const statsService = require('../services/statsService');
 const { collectStatus, formatStatus } = require('../services/statusReport');
 const paynowQr = require('../services/paynowQr');
-const { getMenuMessageId, setMenuMessageId, clearMenuMessageId, isMessageLatestInChat } = require('../services/chatTracker');
+const {
+  getMenuMessageId, setMenuMessageId, clearMenuMessageId, isMessageLatestInChat, noteChatMessage,
+} = require('../services/chatTracker');
 const { config } = require('../config');
 const { formatCents, parsePriceInput } = require('../utils/money');
 const { isImageDocument } = require('../utils/telegramFiles');
@@ -804,6 +806,37 @@ async function showMainAdminMenu(bot, chatId, userId) {
 }
 
 /**
+ * /adminmenu: the menu appears at the bottom of the chat, where the admin is
+ * looking, instead of editing an old copy further up. If the existing menu is
+ * already the latest message it is simply refreshed in place; otherwise it is
+ * deleted and sent again.
+ */
+async function sendMainAdminMenuAtBottom(bot, chatId, userId) {
+  await reloadAdminIds();
+
+  const existingId = await getMenuMessageId(userId);
+
+  if (existingId && await isMessageLatestInChat(chatId, existingId)) {
+    await updateMenuMessage(bot, chatId, userId, menuTexts.mainMenuText(), keyboards.mainMenuKeyboard());
+    return;
+  }
+
+  if (existingId) {
+    try {
+      await bot.deleteMessage(chatId, existingId);
+    } catch (error) {
+      log('warn', 'admin_menu_delete_failed', { error: error.message });
+    }
+    await clearMenuMessageId(userId);
+  }
+
+  const sent = await bot.sendMessage(chatId, menuTexts.mainMenuText(), { reply_markup: keyboards.mainMenuKeyboard() });
+  await setMenuMessageId(userId, sent.message_id);
+  await noteChatMessage(chatId, sent.message_id);
+  await clearDeliveryModeViewer(userId);
+}
+
+/**
  * Update the admin's menu in place, or send a new one.
  *
  * Unchanged behaviour; the message id is now read from and written to the
@@ -865,7 +898,7 @@ async function handleAdminCommand(bot, msg) {
   }
 
   if (text === '/adminmenu') {
-    await showMainAdminMenu(bot, chatId, userId);
+    await sendMainAdminMenuAtBottom(bot, chatId, userId);
     return true;
   }
 
