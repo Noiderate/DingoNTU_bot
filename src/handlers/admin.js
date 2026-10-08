@@ -2724,13 +2724,16 @@ async function postStageOne(bot, { notifyChatId = null } = {}) {
   }
 }
 
-async function runStageOnePost(bot, chatId, answer) {
+async function runStageOnePost(bot, chatId, answer, actor = null) {
   const result = await postStageOne(bot, { notifyChatId: chatId });
 
   if (!result.posted) {
     await answer(STAGE1_POST_FAILURES[result.reason] || 'Could not post.', { show_alert: true });
     return true;
   }
+
+  const postedBy = actor ? (actor.username ? `@${actor.username}` : actor.first_name || null) : null;
+  await closeOrderReminders(bot, { postedBy, cutoffLabel: result.cutoffLabel });
 
   await answer('Orders are open!');
   await bot.sendMessage(
@@ -2767,17 +2770,56 @@ async function runOrderReminders(bot, now = orderWindow.nowSgt()) {
       + 'Check the menu and stock, then tap below to post the "orders open" message.'
     : `⏰ It's ${when} - tonight's orders haven't been posted yet. Tap below to open ordering.`;
 
+  const delivered = [];
+
   for (const adminId of googleSheets.getAdminIds()) {
     try {
-      await bot.sendMessage(adminId, text, {
+      const sent = await bot.sendMessage(adminId, text, {
         reply_markup: { inline_keyboard: [[{ text: '📣 Post orders now', callback_data: CALLBACKS.STAGE1_POST }]] },
       });
+      delivered.push({ chatId: adminId, messageId: sent.message_id });
     } catch (error) {
       log('warn', 'order_reminder_failed', { admin_id: adminId, error: error.message });
     }
   }
 
+  // Remembered so that whoever posts first can clear the others' buttons.
+  await stateStore.update(stateStore.KEYS.orderReminders(), current => ({
+    ...(current || {}),
+    messages: [...((current && current.messages) || []), ...delivered],
+  }));
+
   return action;
+}
+
+/**
+ * Stage 1 is out: turn every outstanding reminder DM into a "tonight's orders
+ * have been posted" notice with no button, so another admin can't post again.
+ */
+async function closeOrderReminders(bot, { postedBy = null, cutoffLabel = null } = {}) {
+  const reminders = await stateStore.get(stateStore.KEYS.orderReminders(), null);
+  const messages = (reminders && reminders.messages) || [];
+
+  if (!messages.length) {
+    return;
+  }
+
+  await stateStore.set(stateStore.KEYS.orderReminders(), { ...reminders, messages: [] });
+
+  const text = `✅ Tonight's orders have been posted${postedBy ? ` by ${postedBy}` : ''}.`
+    + `${cutoffLabel ? ` Ordering closes at ${cutoffLabel}.` : ''}`;
+
+  for (const { chatId, messageId } of messages) {
+    try {
+      await editMessageTextSafely(bot, text, {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [] },
+      });
+    } catch (error) {
+      log('warn', 'order_reminder_close_failed', { chat_id: chatId, error: error.message });
+    }
+  }
 }
 
 /**
@@ -3017,7 +3059,7 @@ async function handleStageCallbacks(bot, query, chatId, userId, data, answer) {
       return true;
     }
 
-    return runStageOnePost(bot, chatId, answer);
+    return runStageOnePost(bot, chatId, answer, query.from);
   }
 
   if (data === CALLBACKS.STAGE1_POST_CONFIRM || data === CALLBACKS.STAGE1_POST_CANCEL) {
@@ -3032,7 +3074,7 @@ async function handleStageCallbacks(bot, query, chatId, userId, data, answer) {
       return true;
     }
 
-    return runStageOnePost(bot, chatId, answer);
+    return runStageOnePost(bot, chatId, answer, query.from);
   }
 
   // --- Settings > Order Schedule ---
@@ -3857,6 +3899,7 @@ module.exports = {
   resetRoundBeforePreorder,
   postStageOne,
   runOrderReminders,
+  closeOrderReminders,
   enforceOrderCutoff,
   showStageTwoPanel,
   handleStageCallbacks,

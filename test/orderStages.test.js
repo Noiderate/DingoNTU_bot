@@ -19,6 +19,7 @@ function mockStore(t, initial = {}) {
   t.mock.method(stateStore, 'get', async (key, fallback = null) => (key in data ? data[key] : fallback));
   t.mock.method(stateStore, 'set', async (key, value) => { data[key] = value; });
   t.mock.method(stateStore, 'remove', async key => { delete data[key]; });
+  t.mock.method(stateStore, 'update', async (key, fn) => { data[key] = fn(key in data ? data[key] : null); return data[key]; });
   t.mock.method(stateStore, 'getMany', async () => ({}));
   t.mock.method(stateStore, 'acquireLock', async () => 'holder');
   t.mock.method(stateStore, 'releaseLock', async () => true);
@@ -119,7 +120,7 @@ test('runOrderReminders DMs every admin once, with a Post button', async t => {
   t.mock.method(googleSheets, 'getAdminIds', () => [11, 22]);
 
   const sent = [];
-  const bot = { async sendMessage(chatId, text, opts) { sent.push({ chatId, text, opts }); } };
+  const bot = { async sendMessage(chatId, text, opts) { sent.push({ chatId, text, opts }); return { message_id: 1000 + chatId }; } };
 
   assert.equal(await admin.runOrderReminders(bot, at('2026-10-08T17:30')), 'remind');
   assert.deepEqual(sent.map(entry => entry.chatId), [11, 22]);
@@ -285,4 +286,30 @@ test('a valid stage-2 total sets remaining = total - sold, for tonight only', as
 
   assert.deepEqual(writes, [{ id: 1, stock: 8 }]); // 25 total - 17 sold
   assert.deepEqual(data[stateStore.KEYS.stagePanel()].adjust, { 1: 5 });
+});
+
+test('once stage 1 is posted, every outstanding reminder becomes a "posted" notice with no button', async t => {
+  const data = mockStore(t);
+  t.mock.method(googleSheets, 'getAdminIds', () => [11, 22]);
+
+  const sentBot = { async sendMessage(chatId) { return { message_id: 1000 + chatId }; } };
+  await admin.runOrderReminders(sentBot, at('2026-10-08T17:30'));
+  assert.equal(data[stateStore.KEYS.orderReminders()].messages.length, 2);
+
+  const edits = [];
+  const bot = { async editMessageText(text, opts) { edits.push({ text, opts }); } };
+
+  await admin.closeOrderReminders(bot, { postedBy: '@ali', cutoffLabel: '12:30 AM' });
+
+  assert.deepEqual(edits.map(edit => edit.opts.chat_id), [11, 22]);
+  assert.deepEqual(edits.map(edit => edit.opts.message_id), [1011, 1022]);
+  assert.match(edits[0].text, /Tonight's orders have been posted by @ali/);
+  assert.match(edits[0].text, /12:30 AM/);
+  assert.deepEqual(edits[0].opts.reply_markup, { inline_keyboard: [] });
+  assert.deepEqual(data[stateStore.KEYS.orderReminders()].messages, []);
+
+  // Nothing left to close the second time.
+  edits.length = 0;
+  await admin.closeOrderReminders(bot, {});
+  assert.equal(edits.length, 0);
 });
