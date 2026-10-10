@@ -1027,6 +1027,13 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
       const result = await menuStore.addFoodItem(parts[0], price);
       await bot.sendMessage(chatId, result.message);
       await clearAdminState(userId);
+
+      const foodItems = await menuStore.getFoodItems();
+      await updateMenuMessage(
+        bot, chatId, userId,
+        menuTexts.manageFoodItemsText(foodItems),
+        keyboards.manageFoodItemsKeyboard()
+      );
       await refreshPreorderPost(bot);
       return true;
     }
