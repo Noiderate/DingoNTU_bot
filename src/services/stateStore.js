@@ -35,6 +35,8 @@ const KEYS = {
   // ([{ chatId, messageId }]), so the others' copies can be removed once one
   // admin has accepted or rejected it.
   adminOrderCards: orderId => `order:admin_cards:${orderId}`,
+  // Channel message ids of the "X has been sold out!" posts, deleted by Finish Delivery.
+  soldOutPosts: () => 'delivery:sold_out_posts',
   // Message id of the self-editing admin menu, so it can be kept at the bottom.
   adminMenuMessage: userId => `admin:menu_msg:${userId}`,
   // Which admins currently have the delivery-mode menu open, for live refresh.

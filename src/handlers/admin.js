@@ -601,7 +601,14 @@ async function announceSoldOut(bot, soldOutItems) {
 
   for (const item of soldOutItems) {
     try {
-      await bot.sendMessage(channelId, `🚫 ${item.name} has been sold out!`);
+      const sent = await bot.sendMessage(channelId, `🚫 ${item.name} has been sold out!`);
+
+      // Remembered so Finish Delivery can clear it away with the other posts.
+      await stateStore.update(
+        stateStore.KEYS.soldOutPosts(),
+        ids => [...(ids || []), sent.message_id],
+        { ttlMs: 3 * 24 * 60 * 60 * 1000 }
+      );
     } catch (error) {
       log('warn', 'sold_out_announce_failed', { item: item.name, error: error.message });
     }
@@ -3973,7 +3980,9 @@ async function handleFinishDelivery(bot, query, chatId, userId) {
   await bot.answerCallbackQuery(query.id);
 
   const channelId = config.telegram.dingoChannelId;
-  const trackedIds = await consumeTrackedDingoMessageIds();
+  const soldOutIds = await stateStore.get(stateStore.KEYS.soldOutPosts(), []);
+  await stateStore.remove(stateStore.KEYS.soldOutPosts());
+  const trackedIds = [...new Set([...await consumeTrackedDingoMessageIds(), ...(soldOutIds || [])])];
 
   if (channelId && trackedIds.length) {
     for (const messageId of trackedIds) {
