@@ -378,7 +378,7 @@ async function buildStageTwoMessageText(adminUsername) {
   const foodItems = await menuStore.getFoodItemsOrThrow();
   const available = foodItems.filter(item => Number(item.stock) > 0);
   const lines = available.length
-    ? available.map(item => `• ${escapeHtml(item.name)} (${item.stock} left)`)
+    ? available.map(item => `• ${escapeHtml(item.name)}`)
     : ['• Nothing left right now'];
   const contactLine = adminUsername
     ? `For any delivery related issues, message @${adminUsername}.`
@@ -2303,6 +2303,8 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     return handleDeliveryPost(bot, query, chatId, userId, data);
   }
 
+  // UNUSED: no menu shows the Revert button any more (see deliveryModeKeyboard
+  // in keyboards.js); this only answers a tap on an old, still-open menu.
   if (data === CALLBACKS.DELIVERY_MODE_REVERT_BLOCK) {
     const currentMenuId = await getMenuMessageId(userId);
 

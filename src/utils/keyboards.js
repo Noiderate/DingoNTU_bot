@@ -328,12 +328,14 @@ function deliveryModeKeyboard(
     }]);
   }
 
-  if (lastBlockedHall) {
-    buttons.push([{
-      text: `↩️ Revert ${lastBlockedHall}`,
-      callback_data: CALLBACKS.DELIVERY_MODE_REVERT_BLOCK,
-    }]);
-  }
+  // UNUSED: the Revert button is no longer shown. Kept (with its handler in
+  // admin.js and orderStore.revertLastBlockedHall) in case it is brought back.
+  // if (lastBlockedHall) {
+  //   buttons.push([{
+  //     text: `↩️ Revert ${lastBlockedHall}`,
+  //     callback_data: CALLBACKS.DELIVERY_MODE_REVERT_BLOCK,
+  //   }]);
+  // }
 
   for (const { hall, count } of serveListHalls) {
     buttons.push([{
