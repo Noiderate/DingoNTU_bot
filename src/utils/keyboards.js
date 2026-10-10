@@ -189,7 +189,7 @@ function spamOrdersKeyboard() {
     inline_keyboard: [
       [{ text: '🧪 30 - 50 orders', callback_data: CALLBACKS.SPAM_ORDERS_SMALL }],
       [{ text: '🧪 100 orders', callback_data: CALLBACKS.SPAM_ORDERS_LARGE }],
-      [{ text: '🗑️ Delete spam orders', callback_data: CALLBACKS.SPAM_ORDERS_DELETE }],
+      [{ text: '🗑️ Remove spam orders', callback_data: CALLBACKS.SPAM_ORDERS_DELETE }],
       [{ text: '← Back', callback_data: CALLBACKS.ADMIN_SETTINGS }],
     ],
   };

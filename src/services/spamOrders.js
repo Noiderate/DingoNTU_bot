@@ -11,7 +11,7 @@ const { toCents } = require('../utils/money');
  * rest of the bot treats them like any other PAID order. What marks them as
  * fake is the customer: every one belongs to a reserved negative Telegram id
  * (SPAM_ID_BASE - 1 ... SPAM_ID_BASE - POOL_SIZE), which no real user can have.
- * deleteSpamOrders finds them by that range.
+ * removeSpamOrders finds them by that range.
  */
 
 const SPAM_ID_BASE = -9_000_000_000;
@@ -174,11 +174,17 @@ async function createSpamOrders(count) {
 }
 
 /**
- * Delete every spam order and the fake customers behind them. Stock is NOT put
- * back (the next round reset / stock edit does that), and rows already mirrored
- * to the Google Sheet are left there.
+ * Remove the spam orders that are still open, and put their stock back.
+ *
+ * Orders cannot be deleted: order_status_history is an append-only audit trail
+ * (a database trigger refuses DELETE, which a cascading delete would hit). So
+ * each still-open spam order is moved to REJECTED, exactly as when an admin
+ * rejects a real order - it leaves the delivery menus, serve lists and
+ * progress counts - and its items go back into stock. Orders already served
+ * are left alone (the food was "handed over"), and so are the fake customer
+ * rows. Rows already mirrored to the Google Sheet are updated to Rejected.
  */
-async function deleteSpamOrders() {
+async function removeSpamOrders() {
   const supabase = getSupabase();
 
   const customers = unwrap(
@@ -190,26 +196,56 @@ async function deleteSpamOrders() {
     'spamOrders.findCustomers'
   );
 
-  const ids = customers.map(customer => customer.id);
-  let deleted = 0;
+  const customerIds = customers.map(customer => customer.id);
+  const open = [];
 
-  for (let start = 0; start < ids.length; start += 50) {
-    const chunk = ids.slice(start, start + 50);
-    const rows = unwrap(
-      await supabase.from('orders').delete().in('customer_id', chunk).select('id'),
-      'spamOrders.deleteOrders'
-    );
-    deleted += rows.length;
+  for (let start = 0; start < customerIds.length; start += 50) {
+    open.push(...unwrap(
+      await supabase
+        .from('orders')
+        .select('id')
+        .in('customer_id', customerIds.slice(start, start + 50))
+        .in('status', repo.ACTIVE_STATUSES),
+      'spamOrders.findOpenOrders'
+    ));
   }
 
-  for (let start = 0; start < ids.length; start += 50) {
-    unwrap(
-      await supabase.from('customers').delete().in('id', ids.slice(start, start + 50)),
-      'spamOrders.deleteCustomers'
-    );
+  const restock = new Map();
+  let removed = 0;
+  let next = 0;
+
+  async function worker() {
+    while (next < open.length) {
+      const { id } = open[next];
+      next += 1;
+
+      const order = await repo.getOrderById(id);
+      if (!order) continue;
+
+      const updated = await repo.transitionOrderStatus(
+        order.id, order.status, repo.STATUS.REJECTED, 'system', 'Spam order removed'
+      );
+      if (!updated) continue;
+
+      removed += 1;
+      for (const item of order.order_items || []) {
+        restock.set(item.food_sheet_row_id, (restock.get(item.food_sheet_row_id) || 0) + item.quantity);
+      }
+    }
   }
 
-  return { deleted };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, open.length) }, worker));
+
+  let restockError = null;
+
+  if (restock.size) {
+    const restored = await menuStore.restoreStock(
+      [...restock].map(([id, quantity]) => ({ id, quantity }))
+    );
+    if (!restored.success) restockError = restored.message;
+  }
+
+  return { removed, restockError };
 }
 
-module.exports = { createSpamOrders, deleteSpamOrders, SPAM_ID_BASE };
+module.exports = { createSpamOrders, removeSpamOrders, SPAM_ID_BASE };

@@ -729,12 +729,16 @@ async function handleSpamOrdersCallback(bot, chatId, userId, data, answer) {
     await answer();
 
     try {
-      const { deleted } = await spamOrders.deleteSpamOrders();
-      await spamMenu(`🗑️ Deleted ${deleted} spam orders.`);
+      const { removed, restockError } = await spamOrders.removeSpamOrders();
+      const stockNote = restockError
+        ? `\n\n⚠️ Stock was NOT fully restored: ${restockError}`
+        : (removed ? '\n\nTheir stock has been put back.' : '');
+
+      await spamMenu(`🗑️ Removed ${removed} open spam orders.${stockNote}`);
       await refreshDeliveryModeMenus(bot);
     } catch (error) {
-      log('error', 'spam_orders_delete_failed', { error: error.message });
-      await spamMenu(`❌ Could not delete spam orders: ${error.message}`);
+      log('error', 'spam_orders_remove_failed', { error: error.message });
+      await spamMenu(`❌ Could not remove spam orders: ${error.message}`);
     }
     return true;
   }

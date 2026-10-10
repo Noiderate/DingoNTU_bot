@@ -19,7 +19,8 @@ function spamOrdersText() {
   return '🧪 Spam Orders\n\n'
     + 'Creates fake PAID orders spread evenly across every hall, using random items from the current menu. '
     + 'Stock is deducted like real orders (it stops early if the menu runs out).\n\n'
-    + 'Delete spam orders removes them again but does not put stock back or clear rows already in the Google Sheet.';
+    + 'Remove spam orders rejects the ones still open and puts their stock back. '
+    + 'Orders are never deleted (the history is a permanent audit trail), so they stay in the Google Sheet as Rejected.';
 }
 
 /**
