@@ -3532,6 +3532,9 @@ async function handleAdminDropoffPhoto(bot, msg) {
       : '⚠️ Sent the photo, but none of those orders were still active to mark (already handled elsewhere).'
   );
 
+  // The confirmation above sits below the delivery menu - bring it back down.
+  await bringDeliveryMenuToBottom(bot, chatId, adminId);
+
   return true;
 }
 
