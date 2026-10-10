@@ -3324,57 +3324,75 @@ async function handleServeCustomerOpen(bot, query, chatId, messageId, data) {
     extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_SERVE_CUSTOMER_PREFIX)
   );
 
-  const hallOrders = await loadHallServeOrders(hallName);
-  const group = groupOrdersByCustomer(hallOrders).find(entry => entry.telegramUserId === telegramUserId);
+  const timer = createStepTimer('serve_customer_open', { hall: hallName });
 
-  if (!group) {
-    // Someone else's tap (or the auto-progress trigger) already resolved
-    // every order this customer had - refresh back to a current list rather
-    // than open an empty submenu.
-    await editMessageTextSafely(bot, HALL_SERVE_LIST_HEADER(hallName), {
+  try {
+    const hallOrders = await timer.step('loadOrders', () => loadHallServeOrders(hallName));
+    const group = groupOrdersByCustomer(hallOrders).find(entry => entry.telegramUserId === telegramUserId);
+
+    if (!group) {
+      // Someone else's tap (or the auto-progress trigger) already resolved
+      // every order this customer had - refresh back to a current list rather
+      // than open an empty submenu.
+      await timer.step('edit', () => editMessageTextSafely(bot, HALL_SERVE_LIST_HEADER(hallName), {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: buildHallCustomerListKeyboard(hallName, hallOrders),
+      }));
+      await timer.step('answer', () => bot.answerCallbackQuery(query.id, { text: 'That customer has no orders left here.' }));
+      return true;
+    }
+
+    await timer.step('edit', () => editMessageTextSafely(bot, buildCustomerSubmenuText(group), {
       chat_id: chatId,
       message_id: messageId,
-      reply_markup: buildHallCustomerListKeyboard(hallName, hallOrders),
-    });
-    await bot.answerCallbackQuery(query.id, { text: 'That customer has no orders left here.' });
+      reply_markup: buildCustomerSubmenuKeyboard(hallName, group),
+    }));
+    await timer.step('answer', () => bot.answerCallbackQuery(query.id));
     return true;
+  } finally {
+    timer.done();
   }
-
-  await editMessageTextSafely(bot, buildCustomerSubmenuText(group), {
-    chat_id: chatId,
-    message_id: messageId,
-    reply_markup: buildCustomerSubmenuKeyboard(hallName, group),
-  });
-  await bot.answerCallbackQuery(query.id);
-  return true;
 }
 
 /** "⬅️ Back" from a customer submenu: return to the phone-number list. */
 async function handleServeBack(bot, query, chatId, messageId, data) {
   const hallName = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_SERVE_BACK_PREFIX);
-  const hallOrders = await loadHallServeOrders(hallName);
+  const timer = createStepTimer('serve_back', { hall: hallName });
 
-  await editMessageTextSafely(bot, HALL_SERVE_LIST_HEADER(hallName), {
-    chat_id: chatId,
-    message_id: messageId,
-    reply_markup: buildHallCustomerListKeyboard(hallName, hallOrders),
-  });
-  await bot.answerCallbackQuery(query.id);
-  return true;
+  try {
+    const hallOrders = await timer.step('loadOrders', () => loadHallServeOrders(hallName));
+
+    await timer.step('edit', () => editMessageTextSafely(bot, HALL_SERVE_LIST_HEADER(hallName), {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: buildHallCustomerListKeyboard(hallName, hallOrders),
+    }));
+    await timer.step('answer', () => bot.answerCallbackQuery(query.id));
+    return true;
+  } finally {
+    timer.done();
+  }
 }
 
 /** "📦 Drop Remaining Items Off": the collated totals + a phone|handle list. */
 async function handleServeRemainingOpen(bot, query, chatId, messageId, data) {
   const hallName = extractCallbackValue(data, CALLBACKS.DELIVERY_MODE_SERVE_REMAINING_PREFIX);
-  const hallOrders = await loadHallServeOrders(hallName);
+  const timer = createStepTimer('serve_remaining_open', { hall: hallName });
 
-  await editMessageTextSafely(bot, buildRemainingItemsText(hallName, hallOrders), {
-    chat_id: chatId,
-    message_id: messageId,
-    reply_markup: buildRemainingItemsKeyboard(hallName, hallOrders),
-  });
-  await bot.answerCallbackQuery(query.id);
-  return true;
+  try {
+    const hallOrders = await timer.step('loadOrders', () => loadHallServeOrders(hallName));
+
+    await timer.step('edit', () => editMessageTextSafely(bot, buildRemainingItemsText(hallName, hallOrders), {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: buildRemainingItemsKeyboard(hallName, hallOrders),
+    }));
+    await timer.step('answer', () => bot.answerCallbackQuery(query.id));
+    return true;
+  } finally {
+    timer.done();
+  }
 }
 
 /**
@@ -3564,7 +3582,17 @@ async function handleServeMarkOrder(bot, query, chatId, messageId, data, kind) {
     return handleSubmenuDropoffStart(bot, query, chatId, messageId, orderId);
   }
 
-  const served = await orderStore.markOrderServed(orderId, query.from.id, { kind });
+  const timer = createStepTimer('serve_mark_order', { kind });
+
+  try {
+    return await markServedTimed(bot, query, chatId, messageId, orderId, kind, timer);
+  } finally {
+    timer.done();
+  }
+}
+
+async function markServedTimed(bot, query, chatId, messageId, orderId, kind, timer) {
+  const served = await timer.step('markServed', () => orderStore.markOrderServed(orderId, query.from.id, { kind }));
 
   if (!served) {
     await bot.answerCallbackQuery(query.id, { text: 'Order is already served or no longer active.' });
@@ -3576,20 +3604,20 @@ async function handleServeMarkOrder(bot, query, chatId, messageId, data, kind) {
     const tagUsername = tagId ? await googleSheets.getAdminUsernameById(bot, tagId) : null;
     const contact = tagUsername ? `@${tagUsername}` : 'the admin';
 
-    await bot.sendMessage(served.chatId, SERVE_CUSTOMER_MESSAGE[kind](served, contact));
+    await timer.step('notifyCustomer', () => bot.sendMessage(served.chatId, SERVE_CUSTOMER_MESSAGE[kind](served, contact)));
   } catch (error) {
     log('warn', 'serve_notify_failed', { order_code: served.code, error: error.message });
   }
 
   if (served.wasUnpaid) {
-    await notifyAdminsServedUnpaid(bot, served);
+    await timer.step('notifyAdminsUnpaid', () => notifyAdminsServedUnpaid(bot, served));
   }
 
   // This is the main trigger for get-ready/coming: check whether the hall
   // just crossed a serve-progress threshold now that one more order is done.
-  await autoAdvanceDeliveryStage(bot, served.hallName);
+  await timer.step('autoAdvance', () => autoAdvanceDeliveryStage(bot, served.hallName));
 
-  const hallOrders = await refreshHallServeOrdersCache(served.hallName);
+  const hallOrders = await timer.step('refreshCache', () => refreshHallServeOrdersCache(served.hallName));
 
   if (hallOrders.length === 0) {
     try {
@@ -3609,25 +3637,25 @@ async function handleServeMarkOrder(bot, query, chatId, messageId, data, kind) {
 
     if (remainingForCustomer.length > 0) {
       const group = groupOrdersByCustomer(remainingForCustomer)[0];
-      await editMessageTextSafely(bot, buildCustomerSubmenuText(group), {
+      await timer.step('editSubmenu', () => editMessageTextSafely(bot, buildCustomerSubmenuText(group), {
         chat_id: chatId,
         message_id: messageId,
         reply_markup: buildCustomerSubmenuKeyboard(served.hallName, group),
-      }).catch(() => {});
+      }).catch(() => {}));
     } else {
-      await editMessageTextSafely(bot, HALL_SERVE_LIST_HEADER(served.hallName), {
+      await timer.step('editList', () => editMessageTextSafely(bot, HALL_SERVE_LIST_HEADER(served.hallName), {
         chat_id: chatId,
         message_id: messageId,
         reply_markup: buildHallCustomerListKeyboard(served.hallName, hallOrders),
-      }).catch(() => {});
+      }).catch(() => {}));
     }
   }
 
-  await refreshDeliveryModeMenus(bot);
-  await bot.answerCallbackQuery(
+  await timer.step('refreshMenus', () => refreshDeliveryModeMenus(bot));
+  await timer.step('answer', () => bot.answerCallbackQuery(
     query.id,
     { text: `Order ${served.code} marked ${kind === 'served' ? 'served' : 'dropped off'}.` }
-  );
+  ));
   return true;
 }
 
