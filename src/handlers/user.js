@@ -626,7 +626,16 @@ async function handleAddFood(bot, query, chatId, userId, data) {
   // confirm time, because stock can change between tapping and confirming.
   if (cartStore.getQuantity(cart, foodId) >= (item.stock || 0)) {
     await answerCallbackSafely(bot, query.id);
-    await bot.sendMessage(chatId, `❌ ${item.name} is sold out.`);
+
+    // Stock left but all of it is already in this cart: say so, so it doesn't
+    // read as the item being gone altogether.
+    const available = item.stock || 0;
+    await bot.sendMessage(
+      chatId,
+      available > 0
+        ? `❌ Only ${available} ${item.name} ${available === 1 ? 'is' : 'are'} available, and ${available === 1 ? 'it is' : 'all of them are'} already in your cart.`
+        : `❌ ${item.name} is sold out.`
+    );
     return true;
   }
 
