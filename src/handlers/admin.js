@@ -703,6 +703,7 @@ async function handlePreorderPostCallback(bot, query, chatId, userId, data, answ
 
   if (data === CALLBACKS.PREORDER_EDIT_TEXT) {
     await setAdminState(userId, STATES.EDIT_PREORDER_TEXT);
+    await bringMenuDown(bot, chatId, userId);
     await updateMenuMessage(
       bot, chatId, userId,
       menuTexts.preorderEditTextPromptText(PREORDER_CUSTOM_TEXT_MAX_LENGTH),
@@ -714,6 +715,7 @@ async function handlePreorderPostCallback(bot, query, chatId, userId, data, answ
 
   if (data === CALLBACKS.PREORDER_ATTACH_PHOTO) {
     await setAdminState(userId, STATES.ATTACH_PREORDER_PHOTO);
+    await bringMenuDown(bot, chatId, userId);
     await updateMenuMessage(
       bot, chatId, userId,
       menuTexts.preorderAttachPhotoPromptText(),
