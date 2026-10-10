@@ -215,7 +215,7 @@ test('postStageOne resets last round, posts with the cutoff, then opens stage 1 
   assert.deepEqual(calls, ['reset']);
   const channelPost = sent.find(entry => entry.chatId === (require('../src/config').config.telegram.dingoChannelId));
   assert.ok(channelPost, 'the orders-open post went to the channel');
-  assert.match(channelPost.text, /Order before 12:30 AM/);
+  assert.match(channelPost.text, /Order form cuts off at 12\.30am\nDelivery is approx\. 15mins after form cut off/);
   assert.match(channelPost.text, /Chicken Rice/);
   assert.deepEqual(deleted.sort(), [40, 41]);
   assert.equal(data[POST].msgId, 50);

@@ -356,7 +356,9 @@ async function buildPreorderMessageText(hallLabel, adminUsername, { customText =
   const intro = buildPreorderIntro(hallLabel, customText);
   const foodLines = buildAvailableFoodLines(foodItems);
   const cutoffLine = cutoffLabel
-    ? `⏰ Order before ${cutoffLabel} - ordering closes sharply then so the drivers can focus on delivering.\n\n`
+    // "12:30 AM" -> "12.30am"
+    ? `🕙 Order form cuts off at ${cutoffLabel.replace(':', '.').replace(' ', '').toLowerCase()}\n`
+      + 'Delivery is approx. 15mins after form cut off\n\n'
     : '';
   const render = lines => `${intro}\n\n${cutoffLine}`
     + `Available food:\n${lines.join('\n')}\n\n`
