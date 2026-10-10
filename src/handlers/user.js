@@ -213,11 +213,15 @@ function buildOrderText(hallName, foodItems, cart) {
   }
 
   return `🏢 Hall: ${hallName}\n\n🛒 Cart:\n${lines || 'No items yet.'}\n`
-    + `💰 Total: ${formatCents(totalCents)}\n\nTap a food item to add:`;
+    + `💰 Total: ${formatCents(totalCents)}\n\nTap a food item to add it to your cart.\n`
+    + '👆 Want more than one of the same item? Tap it once for each one you want - '
+    + 'and tap slowly, waiting for the cart to update before your next tap.\n'
+    + "Can't see an item? It's sold out.";
 }
 
 function buildFoodKeyboard(foodItems) {
-  const buttons = foodItems.map(item => [{
+  // Sold-out items are left off the menu entirely.
+  const buttons = foodItems.filter(item => (item.stock || 0) > 0).map(item => [{
     text: `${item.name} (${formatCents(toCents(item.price) || 0)})`,
     callback_data: `${USER_CALLBACKS.ADD_FOOD_PREFIX}${item.id}`,
   }]);
