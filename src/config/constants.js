@@ -35,6 +35,12 @@ const CALLBACKS = {
   PREORDER_REMOVE_PHOTO: 'preorder_remove_photo',
   PREORDER_PREVIEW: 'preorder_preview',
 
+  // Spam orders (fake orders for testing)
+  SETTINGS_SPAM_ORDERS: 'settings_spam_orders',
+  SPAM_ORDERS_SMALL: 'spam_orders_small',
+  SPAM_ORDERS_LARGE: 'spam_orders_large',
+  SPAM_ORDERS_DELETE: 'spam_orders_delete',
+
   // Halls
   SETTINGS_MANAGE_HALLS: 'settings_manage_halls',
   HALL_ADD: 'hall_add',

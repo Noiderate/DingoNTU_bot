@@ -20,6 +20,7 @@ const { DateTime } = require('luxon');
 const { SGT } = require('../utils/time');
 const cartStore = require('../services/cartStore');
 const statsService = require('../services/statsService');
+const spamOrders = require('../services/spamOrders');
 const { collectStatus, formatStatus } = require('../services/statusReport');
 const paynowQr = require('../services/paynowQr');
 const {
@@ -691,6 +692,52 @@ async function applyPreorderCustomChange(bot) {
   }
 
   return "✅ Saved, but the live post couldn't be updated just now - it will retry within a minute.";
+}
+
+async function handleSpamOrdersCallback(bot, chatId, userId, data, answer) {
+  const spamMenu = text => updateMenuMessage(bot, chatId, userId, text, keyboards.spamOrdersKeyboard());
+
+  if (data === CALLBACKS.SETTINGS_SPAM_ORDERS) {
+    await spamMenu(menuTexts.spamOrdersText());
+    await answer();
+    return true;
+  }
+
+  if (data === CALLBACKS.SPAM_ORDERS_SMALL || data === CALLBACKS.SPAM_ORDERS_LARGE) {
+    const count = data === CALLBACKS.SPAM_ORDERS_LARGE ? 100 : 30 + Math.floor(Math.random() * 21);
+    await answer();
+    await spamMenu(`🧪 Creating ${count} spam orders... this can take a minute.`);
+
+    try {
+      const result = await spamOrders.createSpamOrders(count);
+      const halls = result.perHall.map(hall => `${hall.name}: ${hall.count}`).join('\n');
+      const stopped = result.stoppedReason ? `\n\n⚠️ Stopped early: ${result.stoppedReason}.` : '';
+
+      await spamMenu(`✅ Created ${result.created} of ${result.requested} spam orders.\n\n${halls}${stopped}`);
+      await refreshPreorderPostAfterStockChange(bot, result.stockChanges);
+      await refreshDeliveryModeMenus(bot);
+    } catch (error) {
+      log('error', 'spam_orders_failed', { error: error.message });
+      await spamMenu(`❌ Could not create spam orders: ${error.message}`);
+    }
+    return true;
+  }
+
+  if (data === CALLBACKS.SPAM_ORDERS_DELETE) {
+    await answer();
+
+    try {
+      const { deleted } = await spamOrders.deleteSpamOrders();
+      await spamMenu(`🗑️ Deleted ${deleted} spam orders.`);
+      await refreshDeliveryModeMenus(bot);
+    } catch (error) {
+      log('error', 'spam_orders_delete_failed', { error: error.message });
+      await spamMenu(`❌ Could not delete spam orders: ${error.message}`);
+    }
+    return true;
+  }
+
+  return false;
 }
 
 async function handlePreorderPostCallback(bot, query, chatId, userId, data, answer) {
@@ -2182,6 +2229,10 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   }
 
   if (await handlePreorderPostCallback(bot, query, chatId, userId, data, answer)) {
+    return true;
+  }
+
+  if (await handleSpamOrdersCallback(bot, chatId, userId, data, answer)) {
     return true;
   }
 

@@ -37,6 +37,7 @@ function settingsMenuKeyboard() {
       [{ text: '🏢 Manage Halls', callback_data: CALLBACKS.SETTINGS_MANAGE_HALLS }],
       [{ text: '📝 Edit Dingo Post', callback_data: CALLBACKS.SETTINGS_PREORDER_POST }],
       [{ text: '⏰ Order Schedule', callback_data: CALLBACKS.SETTINGS_ORDER_SCHEDULE }],
+      [{ text: '🧪 Spam Orders', callback_data: CALLBACKS.SETTINGS_SPAM_ORDERS }],
       [{ text: '← Back', callback_data: CALLBACKS.ADMIN_MENU_BACK }],
     ],
   };
@@ -177,6 +178,20 @@ function addFoodItemKeyboard() {
 function cancelStockEditKeyboard() {
   return {
     inline_keyboard: [[{ text: '← Cancel', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }]],
+  };
+}
+
+/**
+ * Spam orders keyboard
+ */
+function spamOrdersKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '🧪 30 - 50 orders', callback_data: CALLBACKS.SPAM_ORDERS_SMALL }],
+      [{ text: '🧪 100 orders', callback_data: CALLBACKS.SPAM_ORDERS_LARGE }],
+      [{ text: '🗑️ Delete spam orders', callback_data: CALLBACKS.SPAM_ORDERS_DELETE }],
+      [{ text: '← Back', callback_data: CALLBACKS.ADMIN_SETTINGS }],
+    ],
   };
 }
 
@@ -350,6 +365,7 @@ module.exports = {
   foodItemsEditPriceKeyboard,
   addFoodItemKeyboard,
   cancelStockEditKeyboard,
+  spamOrdersKeyboard,
   manageHallsKeyboard,
   hallsDeleteKeyboard,
   addHallKeyboard,
