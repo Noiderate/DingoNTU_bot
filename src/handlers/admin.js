@@ -2996,14 +2996,15 @@ async function setStagePanel(value) {
 
 function buildStagePanelText(items, adjust) {
   const lines = items.map(item => {
-    const { total, sold, remaining } = orderWindow.stockFigures(item, adjust);
-    return `• ${item.name}\n   total ${total} · sold ${sold} · remaining ${remaining}`;
+    const { sold, remaining } = orderWindow.stockFigures(item, adjust);
+    return `• ${item.name}\n   sold in stage 1: ${sold} · stage 2 stock: ${remaining}`;
   });
 
   return '📣 Confirm stock before posting spare stock\n\n'
     + (lines.length ? lines.join('\n') : 'No menu items.')
-    + '\n\n"Sold" is what stage-1 orders took. Tap an item to change its total, '
-    + 'or confirm to post the remaining stock to the channel.';
+    + '\n\n"Stage 2 stock" is how many of each item will be offered in stage 2. '
+    + 'Tap an item to set it to the extra stock you are bringing out, '
+    + 'or confirm to post these amounts to the channel.';
 }
 
 function buildStagePanelKeyboard(items) {
@@ -3065,7 +3066,7 @@ async function showStageTwoPanel(bot, chatId, userId, hallId, answer) {
   return true;
 }
 
-/** The admin's typed new total for one item on the confirm-stock screen. */
+/** The admin's typed stage-2 stock (the extra they are bringing out) for one item. */
 async function handleStageTwoStockInput(bot, chatId, userId, text, state, messageId) {
   const trimmed = String(text || '').trim();
 
@@ -3074,7 +3075,7 @@ async function handleStageTwoStockInput(bot, chatId, userId, text, state, messag
     return true;
   }
 
-  const total = Number.parseInt(trimmed, 10);
+  const stage2Stock = Number.parseInt(trimmed, 10);
   const panel = await getStagePanel();
   const items = await menuStore.getFoodItems();
   const item = items.find(entry => entry.id === state.foodItemId);
@@ -3087,19 +3088,13 @@ async function handleStageTwoStockInput(bot, chatId, userId, text, state, messag
 
   const { sold, hasBaseline } = orderWindow.stockFigures(item, panel.adjust);
 
-  if (total < sold) {
-    await bot.sendMessage(
-      chatId,
-      `❌ ${total} is too low - ${sold} of ${item.name} ${sold === 1 ? 'was' : 'were'} already sold in stage 1. `
-      + `Type a new total (at least ${sold}).`
-    );
-    return true;
-  }
-
-  const saved = await menuStore.setRemainingStock(item.id, total - sold);
+  // Stage 2 offers exactly what was typed; the stage-1 sales stay as they were,
+  // so the opening total moves to sold + typed.
+  const total = sold + stage2Stock;
+  const saved = await menuStore.setRemainingStock(item.id, stage2Stock);
 
   if (!saved.success) {
-    await bot.sendMessage(chatId, `${saved.message}\n\nType the total for ${item.name} again.`);
+    await bot.sendMessage(chatId, `${saved.message}\n\nType the stage 2 stock for ${item.name} again.`);
     return true;
   }
 
@@ -3189,12 +3184,13 @@ async function handleStageCallbacks(bot, query, chatId, userId, data, answer) {
       return true;
     }
 
-    const { total, sold, remaining } = orderWindow.stockFigures(item, panel.adjust);
+    const { sold, remaining } = orderWindow.stockFigures(item, panel.adjust);
     await setAdminState(userId, { mode: STATES.EDIT_STAGE2_STOCK, foodItemId });
     await updateMenuMessage(
       bot, chatId, userId,
-      `✏️ ${item.name}\ntotal ${total} · sold ${sold} · remaining ${remaining}\n\n`
-      + `Type the new TOTAL stock (at least ${sold}, what is already sold).`,
+      `✏️ ${item.name}\nsold in stage 1: ${sold} · stage 2 stock: ${remaining}\n\n`
+      + `Type how many ${item.name} you are bringing out for stage 2 `
+      + '(the extra stock to sell). This replaces the stage 2 stock above.',
       { inline_keyboard: [[{ text: '← Back', callback_data: CALLBACKS.STAGE2_BACK }]] }
     );
     await answer();
