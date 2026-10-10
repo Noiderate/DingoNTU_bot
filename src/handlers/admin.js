@@ -1806,6 +1806,7 @@ async function handlePaymentAccept(bot, query, chatId, userId, messageId, data) 
 
     await recordManualReview(orderId, userId, 'manually_approved');
     await updateReviewMessage(bot, query, chatId, messageId, `\n\n✅ Payment accepted by admin ${userId}`);
+    await orderActions.clearOtherAdminCards(bot, orderId, { chatId, messageId });
     await refreshDeliveryModeMenus(bot);
 
     await bot.answerCallbackQuery(query.id, { text: 'Payment accepted' });
@@ -1850,6 +1851,7 @@ async function handlePaymentReject(bot, query, chatId, userId, messageId, data) 
       bot, query, chatId, messageId,
       `\n\n❌ Payment rejected by admin ${userId}\n${restockNote(result)}`
     );
+    await orderActions.clearOtherAdminCards(bot, orderId, { chatId, messageId });
     await refreshDeliveryModeMenus(bot);
     // The order was in the active set (payment_flagged/awaiting/verifying),
     // so it may be sitting in a hall's cached "we are here" list - drop it
@@ -3691,7 +3693,8 @@ async function notifyAdminsServedUnpaid(bot, order) {
 
   for (const adminId of getAdminIds()) {
     try {
-      await bot.sendMessage(adminId, caption, { reply_markup: keyboard });
+      const sent = await bot.sendMessage(adminId, caption, { reply_markup: keyboard });
+      await orderActions.trackAdminCard(order.id, adminId, sent && sent.message_id);
     } catch (error) {
       log('warn', 'served_unpaid_notify_failed', {
         order_code: order.code,

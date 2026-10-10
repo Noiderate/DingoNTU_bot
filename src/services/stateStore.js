@@ -31,6 +31,10 @@ const KEYS = {
   // doesn't need its own Supabase round trip - see admin.js's serve-list
   // functions.
   hallServeOrdersCache: hallName => `delivery:serve_cache:${hallName}`,
+  // The payment-review / "served unpaid" cards sent to every admin for one order
+  // ([{ chatId, messageId }]), so the others' copies can be removed once one
+  // admin has accepted or rejected it.
+  adminOrderCards: orderId => `order:admin_cards:${orderId}`,
   // Message id of the self-editing admin menu, so it can be kept at the bottom.
   adminMenuMessage: userId => `admin:menu_msg:${userId}`,
   // Which admins currently have the delivery-mode menu open, for live refresh.

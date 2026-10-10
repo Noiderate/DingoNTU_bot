@@ -2,6 +2,7 @@ const googleSheets = require('./googleSheets');
 const menuStore = require('./menuStore');
 const repo = require('./orderRepository');
 const orderStore = require('./orderStore');
+const stateStore = require('./stateStore');
 const { formatCents } = require('../utils/money');
 const { log } = require('../utils/logger');
 
@@ -288,7 +289,61 @@ function describeCustomer(order) {
   return order.username ? `@${order.username}` : `${order.userName || 'Unknown'} (${order.userId})`;
 }
 
+// --- Admin review cards ------------------------------------------------------
+
+const ADMIN_CARD_TTL_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * Remember a card (review / served-unpaid DM) sent to one admin for an order.
+ * Cosmetic bookkeeping: a failure is logged, never thrown.
+ */
+async function trackAdminCard(orderId, chatId, messageId) {
+  if (!orderId || !chatId || !messageId) {
+    return;
+  }
+
+  try {
+    await stateStore.update(
+      stateStore.KEYS.adminOrderCards(orderId),
+      cards => [...(cards || []), { chatId, messageId }],
+      { ttlMs: ADMIN_CARD_TTL_MS }
+    );
+  } catch (error) {
+    log('warn', 'admin_card_track_failed', { order_id: orderId, error: error.message });
+  }
+}
+
+/**
+ * Once one admin has accepted or rejected an order, delete every other admin's
+ * copy of its card. `keep` is the acting admin's own card ({ chatId, messageId }),
+ * which stays and is edited to show the outcome. Never throws.
+ */
+async function clearOtherAdminCards(bot, orderId, keep) {
+  try {
+    const key = stateStore.KEYS.adminOrderCards(orderId);
+    const cards = await stateStore.get(key, []);
+
+    for (const card of cards || []) {
+      if (keep && card.chatId === keep.chatId && card.messageId === keep.messageId) {
+        continue;
+      }
+
+      try {
+        await bot.deleteMessage(card.chatId, card.messageId);
+      } catch (error) {
+        log('warn', 'admin_card_delete_failed', { order_id: orderId, error: error.message });
+      }
+    }
+
+    await stateStore.remove(key);
+  } catch (error) {
+    log('warn', 'admin_cards_clear_failed', { order_id: orderId, error: error.message });
+  }
+}
+
 module.exports = {
+  trackAdminCard,
+  clearOtherAdminCards,
   restockOrder,
   markOrderPaid,
   rejectOrderAndRestock,

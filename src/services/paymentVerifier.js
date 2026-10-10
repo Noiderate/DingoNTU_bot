@@ -277,11 +277,11 @@ async function forwardToAdmins(bot, order, submission, decision) {
 
   for (const adminId of getAdminIds()) {
     try {
-      if (submission.telegram_file_id) {
-        await bot.sendPhoto(adminId, submission.telegram_file_id, { caption, reply_markup: keyboard });
-      } else {
-        await bot.sendMessage(adminId, caption, { reply_markup: keyboard });
-      }
+      const sent = submission.telegram_file_id
+        ? await bot.sendPhoto(adminId, submission.telegram_file_id, { caption, reply_markup: keyboard })
+        : await bot.sendMessage(adminId, caption, { reply_markup: keyboard });
+
+      await orderActions.trackAdminCard(order.id, adminId, sent && sent.message_id);
     } catch (error) {
       log('warn', 'admin_forward_failed', {
         order_code: order.code,
