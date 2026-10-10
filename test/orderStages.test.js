@@ -246,7 +246,7 @@ test('showing the confirm-stock screen with no stage-1 post resets first, then l
   assert.equal(data[WINDOW].stage, 'closed');
   const panel = sent[sent.length - 1];
   assert.match(panel.text, /Chicken Rice/);
-  assert.match(panel.text, /sold in stage 1: 17 · stage 2 stock: 3/);
+  assert.match(panel.text, /already sold: 17 · preorder stock: 3/);
   const buttons = panel.opts.reply_markup.inline_keyboard.flat().map(button => button.callback_data);
   assert.ok(buttons.includes(CALLBACKS.STAGE2_CONFIRM));
   assert.ok(buttons.includes(`${CALLBACKS.STAGE2_EDIT_PREFIX}1`));

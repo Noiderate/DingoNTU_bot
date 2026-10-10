@@ -2997,12 +2997,12 @@ async function setStagePanel(value) {
 function buildStagePanelText(items, adjust) {
   const lines = items.map(item => {
     const { sold, remaining } = orderWindow.stockFigures(item, adjust);
-    return `• ${item.name}\n   sold in stage 1: ${sold} · stage 2 stock: ${remaining}`;
+    return `• ${item.name}\n   already sold: ${sold} · preorder stock: ${remaining}`;
   });
 
   return '📣 Confirm stock before posting spare stock\n\n'
     + (lines.length ? lines.join('\n') : 'No menu items.')
-    + '\n\n"Stage 2 stock" is how many of each item will be offered in stage 2. '
+    + '\n\n"Preorder stock" is how many of each item will be offered in the preorder. '
     + 'Tap an item to set it to the extra stock you are bringing out, '
     + 'or confirm to post these amounts to the channel.';
 }
@@ -3094,7 +3094,7 @@ async function handleStageTwoStockInput(bot, chatId, userId, text, state, messag
   const saved = await menuStore.setRemainingStock(item.id, stage2Stock);
 
   if (!saved.success) {
-    await bot.sendMessage(chatId, `${saved.message}\n\nType the stage 2 stock for ${item.name} again.`);
+    await bot.sendMessage(chatId, `${saved.message}\n\nType the preorder stock for ${item.name} again.`);
     return true;
   }
 
@@ -3188,9 +3188,9 @@ async function handleStageCallbacks(bot, query, chatId, userId, data, answer) {
     await setAdminState(userId, { mode: STATES.EDIT_STAGE2_STOCK, foodItemId });
     await updateMenuMessage(
       bot, chatId, userId,
-      `✏️ ${item.name}\nsold in stage 1: ${sold} · stage 2 stock: ${remaining}\n\n`
-      + `Type how many ${item.name} you are bringing out for stage 2 `
-      + '(the extra stock to sell). This replaces the stage 2 stock above.',
+      `✏️ ${item.name}\nalready sold: ${sold} · preorder stock: ${remaining}\n\n`
+      + `Type how many ${item.name} you are bringing out for the preorder `
+      + '(the extra stock to sell). This replaces the preorder stock above.',
       { inline_keyboard: [[{ text: '← Back', callback_data: CALLBACKS.STAGE2_BACK }]] }
     );
     await answer();
