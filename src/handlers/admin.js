@@ -321,7 +321,7 @@ function buildAvailableFoodLines(foodItems) {
 // Telegram caps photo captions at 1024 characters. The custom line is kept
 // well under that so the food list and contact line still fit beneath it.
 const PHOTO_CAPTION_MAX_LENGTH = 1024;
-const PREORDER_CUSTOM_TEXT_MAX_LENGTH = 500;
+const PREORDER_CUSTOM_TEXT_MAX_LENGTH = 650;
 
 async function getPreorderCustom() {
   const stored = await stateStore.get(stateStore.KEYS.preorderCustom(), null) || {};
@@ -750,7 +750,6 @@ async function handlePreorderPostCallback(bot, query, chatId, userId, data, answ
 
   if (data === CALLBACKS.PREORDER_EDIT_TEXT) {
     await setAdminState(userId, STATES.EDIT_PREORDER_TEXT);
-    await bringMenuDown(bot, chatId, userId);
     await updateMenuMessage(
       bot, chatId, userId,
       menuTexts.preorderEditTextPromptText(PREORDER_CUSTOM_TEXT_MAX_LENGTH),
@@ -762,7 +761,6 @@ async function handlePreorderPostCallback(bot, query, chatId, userId, data, answ
 
   if (data === CALLBACKS.PREORDER_ATTACH_PHOTO) {
     await setAdminState(userId, STATES.ATTACH_PREORDER_PHOTO);
-    await bringMenuDown(bot, chatId, userId);
     await updateMenuMessage(
       bot, chatId, userId,
       menuTexts.preorderAttachPhotoPromptText(),
@@ -893,6 +891,10 @@ async function sendMainAdminMenuAtBottom(bot, chatId, userId) {
  */
 async function updateMenuMessage(bot, chatId, userId, text, keyboard, menuMode = 'default') {
   try {
+    // Newer messages (confirmations, typed input) push the menu up the chat:
+    // when that has happened, delete it and send a fresh one at the bottom.
+    await bringMenuDown(bot, chatId, userId);
+
     const existingId = await getMenuMessageId(userId);
     let updated = false;
 
@@ -1093,18 +1095,6 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
       const result = await menuStore.addFoodItem(parts[0], price);
       await bot.sendMessage(chatId, result.message);
       await clearAdminState(userId);
-
-      // Drop the old menu (the add-item prompt, further up) so the fresh one
-      // is sent below the confirmation instead of edited in place above it.
-      const oldMenuId = await getMenuMessageId(userId);
-      if (oldMenuId) {
-        try {
-          await bot.deleteMessage(chatId, oldMenuId);
-        } catch (error) {
-          log('warn', 'admin_menu_delete_failed', { error: error.message });
-        }
-        await clearMenuMessageId(userId);
-      }
 
       const foodItems = await menuStore.getFoodItems();
       await updateMenuMessage(
@@ -2153,7 +2143,6 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     const foodItemId = Number.parseInt(extractCallbackValue(data, CALLBACKS.FOOD_EDIT_STOCK_PREFIX), 10);
     await setAdminState(userId, { mode: STATES.EDIT_FOOD_STOCK_SPECIFIC, foodItemId });
 
-    await bringMenuDown(bot, chatId, userId);
     await updateMenuMessage(
       bot, chatId, userId,
       '📊 Enter new stock level for this food item:\n\nReply with a number (e.g., 10)',
@@ -2175,7 +2164,6 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     const first = foodItems[0];
     await setAdminState(userId, { mode: STATES.EDIT_ALL_FOOD_STOCK_LOOP, items: foodItems, currentIndex: 0 });
 
-    await bringMenuDown(bot, chatId, userId);
     await updateMenuMessage(
       bot, chatId, userId,
       menuTexts.editStockPromptText(first.name, first.stock || 0, 1, foodItems.length),
