@@ -875,6 +875,23 @@ async function updateMenuMessage(bot, chatId, userId, text, keyboard, menuMode =
   }
 }
 
+/**
+ * Make the next updateMenuMessage land at the bottom of the chat: if the
+ * admin's menu is not already the latest message, delete it so a fresh one is
+ * sent instead of editing an old copy further up.
+ */
+async function bringMenuDown(bot, chatId, userId) {
+  const existingId = await getMenuMessageId(userId);
+  if (!existingId || await isMessageLatestInChat(chatId, existingId)) return;
+
+  try {
+    await bot.deleteMessage(chatId, existingId);
+  } catch (error) {
+    log('warn', 'admin_menu_delete_failed', { error: error.message });
+  }
+  await clearMenuMessageId(userId);
+}
+
 
 // --- Commands ----------------------------------------------------------------
 
@@ -2087,6 +2104,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     const foodItemId = Number.parseInt(extractCallbackValue(data, CALLBACKS.FOOD_EDIT_STOCK_PREFIX), 10);
     await setAdminState(userId, { mode: STATES.EDIT_FOOD_STOCK_SPECIFIC, foodItemId });
 
+    await bringMenuDown(bot, chatId, userId);
     await updateMenuMessage(
       bot, chatId, userId,
       '📊 Enter new stock level for this food item:\n\nReply with a number (e.g., 10)',
@@ -2108,6 +2126,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     const first = foodItems[0];
     await setAdminState(userId, { mode: STATES.EDIT_ALL_FOOD_STOCK_LOOP, items: foodItems, currentIndex: 0 });
 
+    await bringMenuDown(bot, chatId, userId);
     await updateMenuMessage(
       bot, chatId, userId,
       menuTexts.editStockPromptText(first.name, first.stock || 0, 1, foodItems.length),
