@@ -1028,6 +1028,18 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
       await bot.sendMessage(chatId, result.message);
       await clearAdminState(userId);
 
+      // Drop the old menu (the add-item prompt, further up) so the fresh one
+      // is sent below the confirmation instead of edited in place above it.
+      const oldMenuId = await getMenuMessageId(userId);
+      if (oldMenuId) {
+        try {
+          await bot.deleteMessage(chatId, oldMenuId);
+        } catch (error) {
+          log('warn', 'admin_menu_delete_failed', { error: error.message });
+        }
+        await clearMenuMessageId(userId);
+      }
+
       const foodItems = await menuStore.getFoodItems();
       await updateMenuMessage(
         bot, chatId, userId,
