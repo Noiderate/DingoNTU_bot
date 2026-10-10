@@ -252,24 +252,7 @@ test('showing the confirm-stock screen with no stage-1 post resets first, then l
   assert.ok(buttons.includes(`${CALLBACKS.STAGE2_EDIT_PREFIX}1`));
 });
 
-test('a stage-2 total lower than what is already sold is refused, and the admin is asked again', async t => {
-  mockStore(t, { [stateStore.KEYS.stagePanel()]: { hallId: 2, adjust: {} } });
-  t.mock.method(menuStore, 'getFoodItems', async () => [{ id: 1, name: 'Chicken Rice', stock: 3, baselineStock: 20 }]);
-  const writes = [];
-  t.mock.method(menuStore, 'setRemainingStock', async (id, stock) => { writes.push({ id, stock }); return { success: true }; });
-
-  const sent = [];
-  const bot = { async sendMessage(chatId, text) { sent.push(text); } };
-
-  const handled = await admin.handleStageTwoStockInput(bot, 11, 11, '10', { mode: STATES.EDIT_STAGE2_STOCK, foodItemId: 1 }, 99);
-
-  assert.equal(handled, true);
-  assert.equal(writes.length, 0);
-  assert.match(sent[0], /too low/);
-  assert.match(sent[0], /17/);
-});
-
-test('a valid stage-2 total sets remaining = total - sold, for tonight only', async t => {
+test('the number typed on the stage-2 screen is the stage 2 stock itself, for tonight only', async t => {
   const data = mockStore(t, { [stateStore.KEYS.stagePanel()]: { hallId: 2, adjust: {} } });
   t.mock.method(menuStore, 'getFoodItems', async () => [{ id: 1, name: 'Chicken Rice', stock: 3, baselineStock: 20 }]);
   t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => [{ id: 1, name: 'Chicken Rice', stock: 8, baselineStock: 20 }]);
@@ -282,9 +265,9 @@ test('a valid stage-2 total sets remaining = total - sold, for tonight only', as
     async deleteMessage() {},
   };
 
-  await admin.handleStageTwoStockInput(bot, 11, 11, '25', { mode: STATES.EDIT_STAGE2_STOCK, foodItemId: 1 }, 99);
+  await admin.handleStageTwoStockInput(bot, 11, 11, '8', { mode: STATES.EDIT_STAGE2_STOCK, foodItemId: 1 }, 99);
 
-  assert.deepEqual(writes, [{ id: 1, stock: 8 }]); // 25 total - 17 sold
+  assert.deepEqual(writes, [{ id: 1, stock: 8 }]); // 8 typed = 8 offered in stage 2; 17 sold + 8 = 25 total
   assert.deepEqual(data[stateStore.KEYS.stagePanel()].adjust, { 1: 5 });
 });
 
