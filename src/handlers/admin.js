@@ -1956,21 +1956,18 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     return true;
   }
 
-  if (data === CALLBACKS.ADMIN_STATS) {
-    // One Supabase query; a failure must not take the basic stats down with it.
-    let funStats = '';
+  if (data === CALLBACKS.ADMIN_SOLD_TODAY) {
+    // Sold = opening stock (baseline) minus what is left, the same figures stage 2 shows.
+    let text;
     try {
-      const { stats, capped } = await statsService.fetchStats();
-      funStats = statsService.formatFunStats(stats, capped);
+      const items = await menuStore.getFoodItemsOrThrow();
+      text = menuTexts.soldTodayText(items.map(item => ({ name: item.name, ...orderWindow.stockFigures(item) })));
     } catch (error) {
-      log('warn', 'fun_stats_failed', { error: error.message });
+      log('warn', 'sold_today_failed', { error: error.message });
+      text = '🧾 Sold Today\n\n✗ Could not read the menu right now. Try again in a moment.';
     }
 
-    await updateMenuMessage(
-      bot, chatId, userId,
-      menuTexts.adminStatsText(getAdminIds().length) + funStats,
-      keyboards.backToMainMenuKeyboard()
-    );
+    await updateMenuMessage(bot, chatId, userId, text, keyboards.backToMainMenuKeyboard());
     await answer();
     return true;
   }

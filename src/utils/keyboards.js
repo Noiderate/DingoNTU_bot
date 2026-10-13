@@ -20,7 +20,7 @@ function mainMenuKeyboard() {
       [{ text: '📣 Post Orders Open', callback_data: CALLBACKS.STAGE1_POST }],
       [{ text: '⚙️ Settings', callback_data: CALLBACKS.ADMIN_SETTINGS }],
       [{ text: '🚚 Enter Delivery Mode', callback_data: CALLBACKS.SETTINGS_DELIVERY_MODE }],
-      [{ text: '📊 Stats', callback_data: CALLBACKS.ADMIN_STATS }],
+      [{ text: '🧾 Sold Today', callback_data: CALLBACKS.ADMIN_SOLD_TODAY }],
       [{ text: '🔄 Reload Settings', callback_data: CALLBACKS.ADMIN_RELOAD }],
     ],
   };

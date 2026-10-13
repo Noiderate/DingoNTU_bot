@@ -95,7 +95,7 @@ screenshots are read automatically and either approved or sent to an admin.
   6:00 PM) and the order cutoff (default 12:30 AM), both Singapore time.
 - **Post Orders Open** — posts stage 1 (below); also offered by the reminder DM.
 - **Delivery Mode** — the announcement sequencer and per-hall serve lists
-- **Stats** / **Reload Settings**
+- **Sold Today** / **Reload Settings**
 
 Payment Accept/Reject for flagged receipts arrives as direct messages.
 The legacy order Confirm/Reject code is preserved but bypassed for new orders.

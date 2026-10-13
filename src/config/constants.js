@@ -4,7 +4,7 @@
 const CALLBACKS = {
   // Main menu
   ADMIN_SETTINGS: 'admin_settings',
-  ADMIN_STATS: 'admin_stats',
+  ADMIN_SOLD_TODAY: 'admin_sold_today',
   ADMIN_RELOAD: 'admin_reload',
   ADMIN_MENU_BACK: 'admin_menu_back',
 

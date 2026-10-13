@@ -24,10 +24,21 @@ function spamOrdersText() {
 }
 
 /**
- * Admin stats text
+ * Sold Today text: one line per item, from stockFigures() entries
+ * ({ name, sold, remaining, hasBaseline }).
  */
-function adminStatsText(adminCount) {
-  return `📊 Bot Statistics:\n\nAdmins loaded: ${adminCount}`;
+function soldTodayText(rows) {
+  if (!rows.length) {
+    return '🧾 Sold Today\n\nNo food items on the menu yet.';
+  }
+
+  const lines = rows.map(row => (row.hasBaseline
+    ? `• ${row.name}: ${row.sold} sold, ${row.remaining} left`
+    : `• ${row.name}: ${row.remaining} left (no opening stock set)`));
+
+  const totalSold = rows.reduce((sum, row) => sum + row.sold, 0);
+
+  return `🧾 Sold Today\n\n${lines.join('\n')}\n\nTotal sold: ${totalSold}`;
 }
 
 /**
@@ -351,7 +362,7 @@ module.exports = {
   mainMenuText,
   settingsMenuText,
   spamOrdersText,
-  adminStatsText,
+  soldTodayText,
   reloadText,
   manageAdminsText,
   addAdminPromptText,

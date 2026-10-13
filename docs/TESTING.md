@@ -217,7 +217,7 @@ Every one of these must behave exactly as it did before the upgrade.
 - [ ] Manage Food: add (`name, price`), delete, edit one stock, edit all stocks
       in sequence.
 - [ ] Manage Halls: add, delete.
-- [ ] Stats and Reload Settings.
+- [ ] Sold Today (per-item sold / remaining) and Reload Settings.
 - [ ] **Outdated delete button.** Open Delete Food, then delete a different row
       in the spreadsheet, then tap the stale button → refused as outdated. It
       must not delete the wrong item.
