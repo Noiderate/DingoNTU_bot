@@ -17,7 +17,7 @@ function createCallbackItemToken(value) {
 function mainMenuKeyboard({ showExtend = false } = {}) {
   return {
     inline_keyboard: [
-      [{ text: '📣 Post Orders Open', callback_data: CALLBACKS.STAGE1_POST }],
+      [{ text: '📣 Post: Orders Open', callback_data: CALLBACKS.STAGE1_POST }],
       ...(showExtend ? [[{ text: '⏳ Extend Orders +15 min', callback_data: CALLBACKS.STAGE1_EXTEND }]] : []),
       [{ text: '⚙️ Settings', callback_data: CALLBACKS.ADMIN_SETTINGS }],
       [{ text: '🚚 Enter Delivery Mode', callback_data: CALLBACKS.SETTINGS_DELIVERY_MODE }],
