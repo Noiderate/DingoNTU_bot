@@ -115,6 +115,23 @@ test('reminder at T-30, one nudge at the target time, never once stage 1 is out'
   assert.equal(orderWindow.reminderAction({ ...base, now: at('2026-10-08T23:00') }), null);
 });
 
+test('changing the post time restarts the day\'s reminders but keeps sent DMs tracked', async t => {
+  const REMINDERS = stateStore.KEYS.orderReminders();
+  const sent = [{ chatId: 11, messageId: 5 }];
+  const data = mockStore(t, {
+    [REMINDERS]: { date: '2026-10-08', reminded: true, nudged: true, messages: sent },
+  });
+
+  await orderWindow.setSchedule({ cutoffTime: '01:00' });
+  assert.equal(data[REMINDERS].reminded, true);
+
+  await orderWindow.setSchedule({ postTime: '17:02' });
+  assert.deepEqual(data[REMINDERS], { messages: sent });
+  assert.equal(orderWindow.reminderAction({
+    now: at('2026-10-08T17:00'), postTime: '17:02', window: null, reminders: data[REMINDERS],
+  }), 'remind');
+});
+
 test('runOrderReminders DMs every admin once, with a Post button', async t => {
   mockStore(t);
   t.mock.method(googleSheets, 'getAdminIds', () => [11, 22]);

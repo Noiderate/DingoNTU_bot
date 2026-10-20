@@ -97,6 +97,15 @@ async function setSchedule(patch) {
   const current = await getSchedule();
   const next = { ...current, ...patch };
   await stateStore.set(stateStore.KEYS.orderSchedule(), next);
+
+  // A new post time starts the day's reminders over, so moving it to a few
+  // minutes from now fires them again. Sent DMs stay tracked so they still close.
+  if (patch.postTime !== undefined) {
+    await stateStore.update(stateStore.KEYS.orderReminders(), current => ({
+      messages: (current && current.messages) || [],
+    }));
+  }
+
   return next;
 }
 
