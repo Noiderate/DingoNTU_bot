@@ -94,6 +94,66 @@ test('changing the cutoff while stage 1 is live moves this round\'s cutoff', asy
 });
 
 
+test('extendCutoff adds 15 minutes each tap while stage 1 is live, and refuses otherwise', async t => {
+  const data = mockStore(t, {
+    [WINDOW]: { stage: 'stage1', postedAt: at('2026-10-08T18:00').toUTC().toISO(), cutoffAt: at('2026-10-09T00:30').toUTC().toISO() },
+  });
+  const now = at('2026-10-08T23:00');
+
+  const first = await orderWindow.extendCutoff(undefined, now);
+  assert.equal(first.extended, true);
+  assert.equal(first.cutoffAt.toFormat('HH:mm'), '00:45');
+  assert.equal(data[WINDOW].cutoffAt, at('2026-10-09T00:45').toUTC().toISO());
+
+  const second = await orderWindow.extendCutoff(undefined, now);
+  assert.equal(second.cutoffAt.toFormat('HH:mm'), '01:00');
+  assert.equal(data[WINDOW].stage, 'stage1');
+
+  // Past the cutoff it is too late, and nothing changes.
+  const late = await orderWindow.extendCutoff(undefined, at('2026-10-09T01:05'));
+  assert.deepEqual(late, { extended: false, reason: 'closed' });
+  assert.equal(data[WINDOW].cutoffAt, at('2026-10-09T01:00').toUTC().toISO());
+
+  // Closed, stage 2, or no round at all: nothing to extend.
+  data[WINDOW] = { ...data[WINDOW], stage: 'closed' };
+  assert.deepEqual(await orderWindow.extendCutoff(undefined, now), { extended: false, reason: 'not_open' });
+  delete data[WINDOW];
+  assert.deepEqual(await orderWindow.extendCutoff(undefined, now), { extended: false, reason: 'not_open' });
+});
+
+test('the main admin menu has an Extend Orders button, and tapping it extends and confirms to the admin', async t => {
+  const { mainMenuKeyboard } = require('../src/utils/keyboards');
+  const buttons = mainMenuKeyboard().inline_keyboard.flat();
+  assert.ok(buttons.some(button => button.callback_data === CALLBACKS.STAGE1_EXTEND));
+
+  mockStore(t, {
+    [WINDOW]: { stage: 'stage1', postedAt: new Date().toISOString(), cutoffAt: new Date(Date.now() + 3600e3).toISOString() },
+  });
+  const sent = [];
+  const answers = [];
+  const bot = { sendMessage: async (chatId, text) => { sent.push({ chatId, text }); } };
+
+  await admin.handleStageCallbacks(bot, { from: {} }, 5, 5, CALLBACKS.STAGE1_EXTEND, async (...args) => { answers.push(args); });
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /extended by 15 minutes/);
+  assert.match(answers[0][0], /^Ordering now closes at /);
+});
+
+test('Extend Orders after the cutoff alerts the admin instead of extending', async t => {
+  mockStore(t, {
+    [WINDOW]: { stage: 'stage1', postedAt: new Date(Date.now() - 7200e3).toISOString(), cutoffAt: new Date(Date.now() - 60e3).toISOString() },
+  });
+  const answers = [];
+  const bot = { sendMessage: async () => { throw new Error('should not send'); } };
+
+  await admin.handleStageCallbacks(bot, { from: {} }, 5, 5, CALLBACKS.STAGE1_EXTEND, async (...args) => { answers.push(args); });
+
+  assert.match(answers[0][0], /already closed/);
+  assert.deepEqual(answers[0][1], { show_alert: true });
+});
+
+
 // --- Reminders ------------------------------------------------------------------
 
 test('reminder at T-30, one nudge at the target time, never once stage 1 is out', () => {

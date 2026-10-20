@@ -79,6 +79,7 @@ const CALLBACKS = {
   STAGE1_POST: 'stage1_post',
   STAGE1_POST_CONFIRM: 'stage1_post_yes',
   STAGE1_POST_CANCEL: 'stage1_post_no',
+  STAGE1_EXTEND: 'stage1_extend',
   // Stage 2 (spare stock): the confirm-stock screen opened by the Delivery Mode button.
   STAGE2_EDIT_PREFIX: 's2e_',           // {foodItemId} -> type a new total for that item
   STAGE2_BACK: 's2_back',

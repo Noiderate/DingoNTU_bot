@@ -18,6 +18,8 @@ const STAGES = { STAGE1: 'stage1', CLOSED: 'closed', STAGE2: 'stage2' };
 
 const DEFAULT_SCHEDULE = { postTime: '18:00', cutoffTime: '00:30' };
 
+// How far the "Extend orders" button pushes the stage-1 cutoff.
+const EXTEND_MINUTES = 15;
 // How long before the target post time the admins are reminded.
 const REMINDER_LEAD_MINUTES = 30;
 // A reminder (or nudge) that is this much overdue is stale and is skipped,
@@ -145,6 +147,27 @@ async function recomputeCutoff(cutoffTime) {
   return true;
 }
 
+/**
+ * Push this round's cutoff back while stage 1 is live. Each call adds to the
+ * current cutoff, so tapping twice gives 30 minutes. Once the cutoff has passed
+ * ordering is already refused (and the post may be closing), so it is too late.
+ */
+async function extendCutoff(minutes = EXTEND_MINUTES, now = nowSgt()) {
+  const current = await getWindow();
+
+  if (!current || current.stage !== STAGES.STAGE1 || !current.cutoffAt) {
+    return { extended: false, reason: 'not_open' };
+  }
+
+  if (isPastCutoff(current, now)) {
+    return { extended: false, reason: 'closed' };
+  }
+
+  const cutoffAt = DateTime.fromISO(current.cutoffAt).plus({ minutes });
+  await setWindow({ ...current, cutoffAt: cutoffAt.toUTC().toISO() });
+  return { extended: true, cutoffAt: cutoffAt.setZone(SGT) };
+}
+
 async function closeStageOne() {
   const current = await getWindow();
   if (!current || current.stage !== STAGES.STAGE1) {
@@ -254,6 +277,7 @@ module.exports = {
   STAGES,
   DEFAULT_SCHEDULE,
   REMINDER_LEAD_MINUTES,
+  EXTEND_MINUTES,
   parseClock,
   formatClock,
   nowSgt,
@@ -265,6 +289,7 @@ module.exports = {
   clearWindow,
   openStageOne,
   recomputeCutoff,
+  extendCutoff,
   closeStageOne,
   openStageTwo,
   isPastCutoff,

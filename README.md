@@ -94,6 +94,9 @@ screenshots are read automatically and either approved or sent to an admin.
 - **Order Schedule** — the target time for the "orders open" post (default
   6:00 PM) and the order cutoff (default 12:30 AM), both Singapore time.
 - **Post Orders Open** — posts stage 1 (below); also offered by the reminder DM.
+- **Extend Orders +15 min** — pushes the live stage-1 cutoff back 15 minutes per tap
+  and updates the channel post's cutoff time. Only works before the cutoff; once
+  ordering has closed it is refused.
 - **Delivery Mode** — the announcement sequencer and per-hall serve lists
 - **Sold Today** / **Reload Settings**
 

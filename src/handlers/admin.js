@@ -2885,6 +2885,29 @@ async function runOrderReminders(bot, now = orderWindow.nowSgt()) {
   return action;
 }
 
+const STAGE1_EXTEND_FAILURES = {
+  not_open: 'Orders are not open right now - there is nothing to extend.',
+  closed: 'Ordering has already closed, so it cannot be extended.',
+};
+
+/** The main menu's "Extend Orders" button: push this round's cutoff back 15 minutes. */
+async function runStageOneExtend(bot, chatId, answer) {
+  const result = await orderWindow.extendCutoff();
+
+  if (!result.extended) {
+    await answer(STAGE1_EXTEND_FAILURES[result.reason] || 'Could not extend.', { show_alert: true });
+    return true;
+  }
+
+  // The channel post shows the cutoff, so re-render it.
+  await refreshPreorderPost(bot);
+
+  const label = orderWindow.formatClock(result.cutoffAt.toFormat('HH:mm'));
+  await answer(`Ordering now closes at ${label}`);
+  await bot.sendMessage(chatId, `⏳ Ordering extended by ${orderWindow.EXTEND_MINUTES} minutes - it now closes at ${label}.`);
+  return true;
+}
+
 /**
  * Stage 1 is out: turn every outstanding reminder DM into a "tonight's orders
  * have been posted" notice with no button, so another admin can't post again.
@@ -3163,6 +3186,10 @@ async function handleStageCallbacks(bot, query, chatId, userId, data, answer) {
     }
 
     return runStageOnePost(bot, chatId, answer, query.from);
+  }
+
+  if (data === CALLBACKS.STAGE1_EXTEND) {
+    return runStageOneExtend(bot, chatId, answer);
   }
 
   // --- Settings > Order Schedule ---
