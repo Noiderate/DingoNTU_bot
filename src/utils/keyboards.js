@@ -14,11 +14,11 @@ function createCallbackItemToken(value) {
 /**
  * Main admin menu keyboard
  */
-function mainMenuKeyboard() {
+function mainMenuKeyboard({ showExtend = false } = {}) {
   return {
     inline_keyboard: [
       [{ text: '📣 Post Orders Open', callback_data: CALLBACKS.STAGE1_POST }],
-      [{ text: '⏳ Extend Orders +15 min', callback_data: CALLBACKS.STAGE1_EXTEND }],
+      ...(showExtend ? [[{ text: '⏳ Extend Orders +15 min', callback_data: CALLBACKS.STAGE1_EXTEND }]] : []),
       [{ text: '⚙️ Settings', callback_data: CALLBACKS.ADMIN_SETTINGS }],
       [{ text: '🚚 Enter Delivery Mode', callback_data: CALLBACKS.SETTINGS_DELIVERY_MODE }],
       [{ text: '🧾 Sold Today', callback_data: CALLBACKS.ADMIN_SOLD_TODAY }],

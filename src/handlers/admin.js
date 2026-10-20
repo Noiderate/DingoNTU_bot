@@ -860,9 +860,14 @@ async function handleAdminPreorderPhoto(bot, msg) {
   return true;
 }
 
+/** The main menu, with "Extend Orders" only while stage 1 ordering is running (or just closed). */
+async function buildMainMenuKeyboard() {
+  return keyboards.mainMenuKeyboard({ showExtend: orderWindow.isExtendable(await orderWindow.getWindow()) });
+}
+
 async function showMainAdminMenu(bot, chatId, userId) {
   await reloadAdminIds();
-  await updateMenuMessage(bot, chatId, userId, menuTexts.mainMenuText(), keyboards.mainMenuKeyboard());
+  await updateMenuMessage(bot, chatId, userId, menuTexts.mainMenuText(), await buildMainMenuKeyboard());
 }
 
 /**
@@ -875,9 +880,10 @@ async function sendMainAdminMenuAtBottom(bot, chatId, userId) {
   await reloadAdminIds();
 
   const existingId = await getMenuMessageId(userId);
+  const keyboard = await buildMainMenuKeyboard();
 
   if (existingId && await isMessageLatestInChat(chatId, existingId)) {
-    await updateMenuMessage(bot, chatId, userId, menuTexts.mainMenuText(), keyboards.mainMenuKeyboard());
+    await updateMenuMessage(bot, chatId, userId, menuTexts.mainMenuText(), keyboard);
     return;
   }
 
@@ -890,7 +896,7 @@ async function sendMainAdminMenuAtBottom(bot, chatId, userId) {
     await clearMenuMessageId(userId);
   }
 
-  const sent = await bot.sendMessage(chatId, menuTexts.mainMenuText(), { reply_markup: keyboards.mainMenuKeyboard() });
+  const sent = await bot.sendMessage(chatId, menuTexts.mainMenuText(), { reply_markup: keyboard });
   await setMenuMessageId(userId, sent.message_id);
   await noteChatMessage(chatId, sent.message_id);
   await clearDeliveryModeViewer(userId);
@@ -2833,6 +2839,12 @@ async function runStageOnePost(bot, chatId, answer, actor = null) {
     chatId,
     `✅ Orders are open - posted to the Dingo channel. Ordering closes at ${result.cutoffLabel}.`
   );
+
+  // Brings the main menu back down with the Extend Orders button now showing.
+  if (actor && actor.id) {
+    await showMainAdminMenu(bot, chatId, actor.id);
+  }
+
   return true;
 }
 
@@ -2885,26 +2897,33 @@ async function runOrderReminders(bot, now = orderWindow.nowSgt()) {
   return action;
 }
 
-const STAGE1_EXTEND_FAILURES = {
-  not_open: 'Orders are not open right now - there is nothing to extend.',
-  closed: 'Ordering has already closed, so it cannot be extended.',
-};
-
-/** The main menu's "Extend Orders" button: push this round's cutoff back 15 minutes. */
+/**
+ * The main menu's "Extend Orders" button: push this round's cutoff back 15
+ * minutes, or, if the cutoff already passed, reopen ordering for 15 minutes.
+ */
 async function runStageOneExtend(bot, chatId, answer) {
   const result = await orderWindow.extendCutoff();
 
   if (!result.extended) {
-    await answer(STAGE1_EXTEND_FAILURES[result.reason] || 'Could not extend.', { show_alert: true });
+    await answer('Orders are not open right now - there is nothing to extend.', { show_alert: true });
     return true;
   }
 
-  // The channel post shows the cutoff, so re-render it.
+  // The channel post shows the cutoff (and, once reopened, loses "closed").
   await refreshPreorderPost(bot);
+
+  if (result.reopened) {
+    await refreshDeliveryModeMenus(bot).catch(() => {});
+  }
 
   const label = orderWindow.formatClock(result.cutoffAt.toFormat('HH:mm'));
   await answer(`Ordering now closes at ${label}`);
-  await bot.sendMessage(chatId, `⏳ Ordering extended by ${orderWindow.EXTEND_MINUTES} minutes - it now closes at ${label}.`);
+  await bot.sendMessage(
+    chatId,
+    result.reopened
+      ? `🔓 Ordering reopened - it now closes at ${label}.`
+      : `⏳ Ordering extended by ${orderWindow.EXTEND_MINUTES} minutes - it now closes at ${label}.`
+  );
   return true;
 }
 

@@ -94,7 +94,7 @@ test('changing the cutoff while stage 1 is live moves this round\'s cutoff', asy
 });
 
 
-test('extendCutoff adds 15 minutes each tap while stage 1 is live, and refuses otherwise', async t => {
+test('extendCutoff adds 15 minutes each tap while open, and reopens ordering once the cutoff has passed', async t => {
   const data = mockStore(t, {
     [WINDOW]: { stage: 'stage1', postedAt: at('2026-10-08T18:00').toUTC().toISO(), cutoffAt: at('2026-10-09T00:30').toUTC().toISO() },
   });
@@ -102,6 +102,7 @@ test('extendCutoff adds 15 minutes each tap while stage 1 is live, and refuses o
 
   const first = await orderWindow.extendCutoff(undefined, now);
   assert.equal(first.extended, true);
+  assert.equal(first.reopened, false);
   assert.equal(first.cutoffAt.toFormat('HH:mm'), '00:45');
   assert.equal(data[WINDOW].cutoffAt, at('2026-10-09T00:45').toUTC().toISO());
 
@@ -109,23 +110,45 @@ test('extendCutoff adds 15 minutes each tap while stage 1 is live, and refuses o
   assert.equal(second.cutoffAt.toFormat('HH:mm'), '01:00');
   assert.equal(data[WINDOW].stage, 'stage1');
 
-  // Past the cutoff it is too late, and nothing changes.
+  // Past the cutoff (tick not yet run): reopens for 15 minutes from now.
   const late = await orderWindow.extendCutoff(undefined, at('2026-10-09T01:05'));
-  assert.deepEqual(late, { extended: false, reason: 'closed' });
-  assert.equal(data[WINDOW].cutoffAt, at('2026-10-09T01:00').toUTC().toISO());
+  assert.equal(late.reopened, true);
+  assert.equal(data[WINDOW].cutoffAt, at('2026-10-09T01:20').toUTC().toISO());
+  assert.equal(await orderWindow.isOrderingOpen(at('2026-10-09T01:10')), true);
 
-  // Closed, stage 2, or no round at all: nothing to extend.
+  // Already closed by the tick: same, ordering opens again.
   data[WINDOW] = { ...data[WINDOW], stage: 'closed' };
+  const afterClose = await orderWindow.extendCutoff(undefined, at('2026-10-09T01:30'));
+  assert.equal(afterClose.reopened, true);
+  assert.equal(data[WINDOW].stage, 'stage1');
+  assert.equal(data[WINDOW].cutoffAt, at('2026-10-09T01:45').toUTC().toISO());
+
+  // Stage 2, a closed window with no stage-1 post behind it, or no round: nothing to extend.
+  data[WINDOW] = { stage: 'stage2', cutoffAt: data[WINDOW].cutoffAt };
+  assert.deepEqual(await orderWindow.extendCutoff(undefined, now), { extended: false, reason: 'not_open' });
+  data[WINDOW] = { stage: 'closed', postedAt: null, cutoffAt: null };
   assert.deepEqual(await orderWindow.extendCutoff(undefined, now), { extended: false, reason: 'not_open' });
   delete data[WINDOW];
   assert.deepEqual(await orderWindow.extendCutoff(undefined, now), { extended: false, reason: 'not_open' });
 });
 
-test('the main admin menu has an Extend Orders button, and tapping it extends and confirms to the admin', async t => {
+test('the Extend Orders button only shows while stage 1 is running or just closed', () => {
   const { mainMenuKeyboard } = require('../src/utils/keyboards');
-  const buttons = mainMenuKeyboard().inline_keyboard.flat();
-  assert.ok(buttons.some(button => button.callback_data === CALLBACKS.STAGE1_EXTEND));
+  const hasExtend = options => mainMenuKeyboard(options).inline_keyboard.flat()
+    .some(button => button.callback_data === CALLBACKS.STAGE1_EXTEND);
 
+  assert.equal(hasExtend(), false);
+  assert.equal(hasExtend({ showExtend: true }), true);
+
+  const cutoffAt = new Date().toISOString();
+  assert.equal(orderWindow.isExtendable(null), false);
+  assert.equal(orderWindow.isExtendable({ stage: 'stage1', cutoffAt }), true);
+  assert.equal(orderWindow.isExtendable({ stage: 'closed', cutoffAt }), true);
+  assert.equal(orderWindow.isExtendable({ stage: 'closed', cutoffAt: null }), false);
+  assert.equal(orderWindow.isExtendable({ stage: 'stage2', cutoffAt }), false);
+});
+
+test('tapping Extend Orders extends and confirms to the admin', async t => {
   mockStore(t, {
     [WINDOW]: { stage: 'stage1', postedAt: new Date().toISOString(), cutoffAt: new Date(Date.now() + 3600e3).toISOString() },
   });
@@ -140,16 +163,28 @@ test('the main admin menu has an Extend Orders button, and tapping it extends an
   assert.match(answers[0][0], /^Ordering now closes at /);
 });
 
-test('Extend Orders after the cutoff alerts the admin instead of extending', async t => {
-  mockStore(t, {
-    [WINDOW]: { stage: 'stage1', postedAt: new Date(Date.now() - 7200e3).toISOString(), cutoffAt: new Date(Date.now() - 60e3).toISOString() },
+test('tapping Extend Orders after the cutoff reopens ordering', async t => {
+  const data = mockStore(t, {
+    [WINDOW]: { stage: 'closed', postedAt: new Date(Date.now() - 7200e3).toISOString(), cutoffAt: new Date(Date.now() - 60e3).toISOString() },
   });
+  const sent = [];
+  const bot = { sendMessage: async (chatId, text) => { sent.push(text); } };
+
+  await admin.handleStageCallbacks(bot, { from: {} }, 5, 5, CALLBACKS.STAGE1_EXTEND, async () => {});
+
+  assert.equal(data[WINDOW].stage, 'stage1');
+  assert.equal(await orderWindow.isOrderingOpen(), true);
+  assert.match(sent[0], /Ordering reopened/);
+});
+
+test('Extend Orders with no stage-1 round alerts the admin', async t => {
+  mockStore(t);
   const answers = [];
   const bot = { sendMessage: async () => { throw new Error('should not send'); } };
 
   await admin.handleStageCallbacks(bot, { from: {} }, 5, 5, CALLBACKS.STAGE1_EXTEND, async (...args) => { answers.push(args); });
 
-  assert.match(answers[0][0], /already closed/);
+  assert.match(answers[0][0], /not open/);
   assert.deepEqual(answers[0][1], { show_alert: true });
 });
 

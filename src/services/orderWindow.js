@@ -148,24 +148,33 @@ async function recomputeCutoff(cutoffTime) {
 }
 
 /**
- * Push this round's cutoff back while stage 1 is live. Each call adds to the
- * current cutoff, so tapping twice gives 30 minutes. Once the cutoff has passed
- * ordering is already refused (and the post may be closing), so it is too late.
+ * Whether the "Extend orders" button applies: stage 1 is live, or its cutoff
+ * has passed and the round is still waiting for stage 2. A window made without
+ * a stage-1 post (no cutoff recorded) is not extendable.
+ */
+function isExtendable(window) {
+  return Boolean(window && window.cutoffAt
+    && (window.stage === STAGES.STAGE1 || window.stage === STAGES.CLOSED));
+}
+
+/**
+ * Push this round's cutoff back. Each call adds to the current cutoff, so
+ * tapping twice while open gives 30 minutes. If the cutoff has already passed,
+ * ordering is reopened and runs for `minutes` from now. The caller refreshes
+ * the channel post.
  */
 async function extendCutoff(minutes = EXTEND_MINUTES, now = nowSgt()) {
   const current = await getWindow();
 
-  if (!current || current.stage !== STAGES.STAGE1 || !current.cutoffAt) {
+  if (!isExtendable(current)) {
     return { extended: false, reason: 'not_open' };
   }
 
-  if (isPastCutoff(current, now)) {
-    return { extended: false, reason: 'closed' };
-  }
-
-  const cutoffAt = DateTime.fromISO(current.cutoffAt).plus({ minutes });
-  await setWindow({ ...current, cutoffAt: cutoffAt.toUTC().toISO() });
-  return { extended: true, cutoffAt: cutoffAt.setZone(SGT) };
+  const reopened = current.stage === STAGES.CLOSED || isPastCutoff(current, now);
+  const base = reopened ? now : DateTime.fromISO(current.cutoffAt);
+  const cutoffAt = base.plus({ minutes });
+  await setWindow({ ...current, stage: STAGES.STAGE1, cutoffAt: cutoffAt.toUTC().toISO() });
+  return { extended: true, reopened, cutoffAt: cutoffAt.setZone(SGT) };
 }
 
 async function closeStageOne() {
@@ -289,6 +298,7 @@ module.exports = {
   clearWindow,
   openStageOne,
   recomputeCutoff,
+  isExtendable,
   extendCutoff,
   closeStageOne,
   openStageTwo,
