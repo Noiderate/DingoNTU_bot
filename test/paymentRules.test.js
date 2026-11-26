@@ -244,8 +244,21 @@ test('the order code counts wherever the bank printed it', () => {
   assert.equal(evaluateDateOnly({ bill_reference: 'Ref: DG20260916-14' }).outcome, OUTCOMES.AUTO_APPROVED);
 });
 
-test('a date-only receipt without the order code still goes to an admin', () => {
-  const result = evaluateDateOnly({ bill_reference: null });
+test('a date-only receipt without the order code is approved on its transaction ID (OCBC, UEN typed in)', () => {
+  // "6.80 SGD paid · To DINGO FOODS · When 27 Nov 2026 · Transaction ID 2611270112657746"
+  const result = evaluateDateOnly({ bill_reference: null, reference_id: '2611270112657746' });
+  assert.equal(result.outcome, OUTCOMES.AUTO_APPROVED);
+  assert.equal(result.normalized.referenceNormalized, '2611270112657746');
+});
+
+test('a date-only receipt with neither the order code nor a transaction ID goes to an admin', () => {
+  const result = evaluateDateOnly({ bill_reference: null, reference_id: null });
+  assert.equal(result.outcome, OUTCOMES.FLAGGED);
+  assert.ok(result.reasons.includes(REASONS.TIMESTAMP_UNREADABLE));
+});
+
+test('a date-only receipt naming a different order is not approved on its transaction ID', () => {
+  const result = evaluateDateOnly({ bill_reference: 'DG20260916-7', reference_id: '2611270112657746' });
   assert.equal(result.outcome, OUTCOMES.FLAGGED);
   assert.ok(result.reasons.includes(REASONS.TIMESTAMP_UNREADABLE));
 });
@@ -354,10 +367,11 @@ test('small clock skew is tolerated', () => {
   assert.equal(result.outcome, OUTCOMES.AUTO_APPROVED);
 });
 
-test('a date with no time cannot be verified', () => {
+test('a date with no time and nothing to back it (no order code, no transaction ID) cannot be verified', () => {
   const result = evaluate({
     transaction_time: null,
     transaction_datetime_text: '16 Sep 2026',
+    reference_id: null,
   });
   assert.equal(result.outcome, OUTCOMES.FLAGGED);
   assert.ok(result.reasons.includes(REASONS.TIMESTAMP_UNREADABLE));

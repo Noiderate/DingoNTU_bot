@@ -248,13 +248,30 @@ function receiptShowsOrderCode(extraction, orderCode) {
     return false;
   }
 
-  return [extraction.bill_reference, extraction.reference_id, extraction.recipient_uen]
-    .filter(Boolean)
-    .some(value => {
-      const text = String(value);
-      return normalizeReference(text) === wanted
-        || text.split(/[\s,;:|()]+/).some(token => normalizeReference(token) === wanted);
-    });
+  return referenceTokens(extraction).includes(wanted);
+}
+
+// Our order codes: DG + yyyymmdd + "-" + n (see 0004_order_code.sql).
+const ORDER_CODE_PATTERN = /^DG\d{8}\d+$/;
+
+/** Every normalised reference-like token the receipt shows. */
+function referenceTokens(extraction) {
+  const tokens = [];
+  for (const value of [extraction.bill_reference, extraction.reference_id, extraction.recipient_uen]) {
+    if (!value) {
+      continue;
+    }
+    const text = String(value);
+    tokens.push(normalizeReference(text));
+    text.split(/[\s,;:|()]+/).forEach(token => tokens.push(normalizeReference(token)));
+  }
+  return tokens.filter(Boolean);
+}
+
+/** Whether the receipt shows an order code that belongs to a DIFFERENT order. */
+function receiptShowsOtherOrderCode(extraction, orderCode) {
+  const own = normalizeReference(orderCode);
+  return referenceTokens(extraction).some(token => ORDER_CODE_PATTERN.test(token) && token !== own);
 }
 
 
@@ -339,13 +356,21 @@ function evaluatePayment({
   const txnAt = truncateToMinute(resolveTransactionTime(extraction));
   const orderCodeShown = receiptShowsOrderCode(extraction, order.code);
   const txnDate = txnAt ? null : parseReceiptDate(extraction.transaction_date, extraction.transaction_datetime_text);
+  // Date-only receipts are accepted on either this order's own code, or a
+  // transaction reference the duplicate guard can hold onto - but never when
+  // the receipt names a different order, i.e. was paid for something else.
+  const dateOnlyBacking = orderCodeShown
+    || (Boolean(normalizeReference(extraction.reference_id)) && !receiptShowsOtherOrderCode(extraction, order.code));
 
-  if (!txnAt && txnDate && orderCodeShown) {
+  if (!txnAt && txnDate && dateOnlyBacking) {
     // Date but no time (OCBC prints only "26 Nov 2026"). The time check exists
-    // to stop recycled old receipts, and a receipt carrying this order's own
-    // code cannot predate the order - the code didn't exist yet - while the
-    // duplicate guard stops it being reused. So the date only has to fall
-    // between the day the order was placed and the day it was sent.
+    // to stop recycled old receipts. A receipt carrying this order's own code
+    // cannot predate the order - the code didn't exist yet. Without the code
+    // (paid by typing the UEN), the bank's transaction ID is claimed by the
+    // duplicate guard, so one payment can still only ever cover one order; the
+    // remaining risk is an unsubmitted payment to us from earlier the same day,
+    // which was accepted as a trade-off. The date has to fall between the day
+    // the order was placed and the day the screenshot was sent.
     if (txnDate < sgtIsoDate(order.created_at)) {
       reasons.add(REASONS.TIMESTAMP_BEFORE_ORDER);
     }

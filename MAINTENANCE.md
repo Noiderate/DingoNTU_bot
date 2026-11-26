@@ -1078,6 +1078,20 @@ An honest list.
 
 ## 10. Change log
 
+**2026-11-27 — Date-only receipts without the order code; UOB "Submitted"**
+
+- A date-only receipt (OCBC) that does **not** show the order code - the
+  customer typed the UEN instead of scanning the QR - is now approved on its
+  bank Transaction ID, provided the date is between the order day and the day
+  it was sent, amount and recipient match, and it doesn't name a different
+  order's code. The duplicate guard claims the Transaction ID, so one payment
+  still covers one order. Accepted risk: an unsubmitted payment to us from
+  earlier the same day could be used. No ID at all → admin, as before.
+- Gemini prompt: UOB's "Submitted" completed-transfer screen counts as
+  `successful` (it was read as pending and handed back / escalated after 3
+  tries), and of two "Reference no." fields the order code is
+  `bill_reference`.
+
 **2026-11-26 — Today's Orders: Left To Serve + Stock tables; mid-round stock edits keep "sold"**
 
 - Today's Orders tab now ends with two more tables: **Left To Serve** (items
