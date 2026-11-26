@@ -83,7 +83,9 @@ HH:mm or HH:mm:ss). Singapore dates are DAY/MONTH/YEAR: 09/10/2026 means
 Classify transfer_status carefully. This matters more than any other field:
 - "successful" ONLY when the screen confirms the transfer has been COMPLETED,
   e.g. "Transfer Successful", "Payment Successful", "Sent", "Transaction
-  Completed".
+  Completed", "<amount> SGD paid". UOB (incl. KrisFlyer UOB) titles its
+  completed PayNow/FAST transfer screen "Submitted" with a tick, followed by
+  the amount, To/From and reference numbers: that is "successful" too.
 - "review_or_confirm" for a confirmation screen shown BEFORE sending, e.g.
   "Review your transfer", "Confirm payment", or any screen with a Confirm,
   Send or Slide-to-pay button still present.
@@ -100,7 +102,9 @@ the recipient's UEN - never put it in recipient_uen.
 
 bill_reference is any order code / bill reference / payment comment shown,
 e.g. "DG20261126-14", whatever the bank labels it ("Reference number",
-"UEN/Bill Reference No.", "Comments"). Copy it exactly. For reference_id
+"Reference no. (optional)", "UEN/Bill Reference No.", "Comments"). Copy it
+exactly. If two fields share a label, the one that looks like an order code
+(DG followed by digits) is bill_reference and the other is reference_id. For reference_id
 prefer the bank's own transaction reference (e.g. "Transaction Ref. No.",
 "Transaction ID"); if the only reference shown is the order code, use it for
 both.
