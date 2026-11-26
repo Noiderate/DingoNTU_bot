@@ -24,21 +24,22 @@ function spamOrdersText() {
 }
 
 /**
- * Sold Today text: one line per item, from stockFigures() entries
- * ({ name, sold, remaining, hasBaseline }).
+ * Sold Today text: one block per item, from { name, starting, remaining, sold }
+ * (todaySheet.buildStockRows). Sold comes from tonight's orders, excluding
+ * expired, rejected and cancelled ones.
  */
 function soldTodayText(rows) {
   if (!rows.length) {
     return '🧾 Sold Today\n\nNo food items on the menu yet.';
   }
 
-  const lines = rows.map(row => (row.hasBaseline
-    ? `• ${row.name}: ${row.sold} sold, ${row.remaining} left`
-    : `• ${row.name}: ${row.remaining} left (no opening stock set)`));
+  const lines = rows.map(row => `• ${row.name}\n   Start ${row.starting} · Sold ${row.sold} · Left ${row.remaining}`);
 
   const totalSold = rows.reduce((sum, row) => sum + row.sold, 0);
+  const totalLeft = rows.reduce((sum, row) => sum + row.remaining, 0);
 
-  return `🧾 Sold Today\n\n${lines.join('\n')}\n\nTotal sold: ${totalSold}`;
+  return `🧾 Sold Today\n\n${lines.join('\n')}\n\nTotal sold: ${totalSold} · Total left: ${totalLeft}\n`
+    + '(Start = left + sold. Expired, rejected and cancelled orders are not counted.)';
 }
 
 /**

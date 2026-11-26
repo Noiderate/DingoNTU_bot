@@ -17,6 +17,7 @@ const repo = require('../services/orderRepository');
 const stateStore = require('../services/stateStore');
 const orderWindow = require('../services/orderWindow');
 const botPause = require('../services/botPause');
+const todaySheet = require('../services/todaySheet');
 const { DateTime } = require('luxon');
 const { SGT } = require('../utils/time');
 const cartStore = require('../services/cartStore');
@@ -2050,11 +2051,19 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   }
 
   if (data === CALLBACKS.ADMIN_SOLD_TODAY) {
-    // Sold = opening stock (baseline) minus what is left, the same figures stage 2 shows.
+    // Sold is counted from tonight's orders and starting = left + sold - the
+    // same figures as the Stock table in the Today's Orders tab, so the two
+    // always agree and a mid-round stock edit can't wipe the sold count.
     let text;
     try {
-      const items = await menuStore.getFoodItemsOrThrow();
-      text = menuTexts.soldTodayText(items.map(item => ({ name: item.name, ...orderWindow.stockFigures(item) })));
+      const [items, orders] = await Promise.all([
+        menuStore.getFoodItemsOrThrow(),
+        todaySheet.getTodaysOrders(),
+      ]);
+      text = menuTexts.soldTodayText(
+        todaySheet.buildStockRows(items, orders)
+          .map(([name, starting, remaining, sold]) => ({ name, starting, remaining, sold }))
+      );
     } catch (error) {
       log('warn', 'sold_today_failed', { error: error.message });
       text = '🧾 Sold Today\n\n✗ Could not read the menu right now. Try again in a moment.';

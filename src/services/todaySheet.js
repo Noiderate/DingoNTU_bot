@@ -332,6 +332,7 @@ module.exports = {
   buildItemTotals,
   buildLeftToServeTotals,
   buildStockRows,
+  getTodaysOrders,
   getServiceDayWindow,
   refreshTodaySheet,
 };

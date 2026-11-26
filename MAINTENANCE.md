@@ -1092,6 +1092,9 @@ An honest list.
   starting stock and stock left to the same number, which reset 🧾 Sold Today
   to 0. The prompt now shows "total · sold · left". Outside a round an edit
   sets the starting stock for next time, as before.
+- 🧾 **Sold Today** in the bot now shows Start · Sold · Left per item from the
+  same figures as the sheet's Stock table (orders this service day; Start =
+  Left + Sold), instead of starting stock − stock left.
 
 **2026-11-26 — Date-only receipts (OCBC) accepted when they show the order code**
 
