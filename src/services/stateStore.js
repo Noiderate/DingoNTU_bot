@@ -57,6 +57,10 @@ const KEYS = {
   // Which ordering stage the night is in ({ stage, postedAt, cutoffAt }),
   // see orderWindow.js. Absent before stage 1 is posted and after Finish Delivery.
   orderWindow: () => 'delivery:order_window',
+  // Set while an admin has tapped Stop Bot ({ pausedAt, until, pausedBy,
+  // pausedById, contact, previousWindow }); expires at the end of the service
+  // day, see botPause.js. Deleting it by hand resumes the bot.
+  botPause: () => 'bot:pause',
   // Admin-set target post time and order cutoff ({ postTime, cutoffTime }, HH:mm SGT).
   orderSchedule: () => 'settings:order_schedule',
   // Which stage-1 reminders were already sent today ({ date, reminded, nudged }).
@@ -291,6 +295,8 @@ const LOCKS = {
   cart: userId => `cart:${userId}`,
   // Serialises delivery-mode channel posts.
   deliveryPost: () => 'delivery:post',
+  // Stop Bot / Resume Bot, so two admins tapping at once can't both run it.
+  botPause: () => 'bot:pause_toggle',
   // Makes consuming the reset token and running the reset one step.
   deliveryReset: () => 'delivery:reset',
   // Rate-limits how often the Today's Orders tab is rewritten (see todaySheet).

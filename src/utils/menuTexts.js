@@ -1,8 +1,8 @@
 /**
  * Main admin menu text
  */
-function mainMenuText() {
-  return `👑 Admin Menu`;
+function mainMenuText(statusLine = null) {
+  return statusLine ? `👑 Admin Menu\n\n${statusLine}` : `👑 Admin Menu`;
 }
 
 /**

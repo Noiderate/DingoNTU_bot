@@ -6,6 +6,7 @@ const stateStore = require('../src/services/stateStore');
 const orderStore = require('../src/services/orderStore');
 const googleSheets = require('../src/services/googleSheets');
 const menuStore = require('../src/services/menuStore');
+const statsService = require('../src/services/statsService');
 const { config } = require('../src/config');
 
 /**
@@ -121,6 +122,24 @@ test('refreshPreorderPostAfterStockChange announces and reposts when something s
   assert.equal(channelMessages.length, 2);
   assert.match(channelMessages[0].text, /Chicken Rice has been sold out/);
   assert.deepEqual(deleted, [{ chatId: 'chan1', msgId: 111 }]);
+});
+
+test('refreshPreorderPostAfterStockChange posts nothing when stock hits 0 after Finish Delivery', async t => {
+  // Finish Delivery removes the preorder post state, so every lookup falls back.
+  t.mock.method(stateStore, 'get', async (key, fallback = null) => fallback);
+  const statsCalls = [];
+  t.mock.method(statsService, 'recordSoldOut', async items => { statsCalls.push(items); });
+
+  const bot = {
+    async sendMessage() { throw new Error('should not post to the channel - delivery has ended'); },
+    async editMessageText() { throw new Error('should not edit - there is no live post'); },
+    async deleteMessage() { throw new Error('should not delete - there is no live post'); },
+  };
+
+  await assert.doesNotReject(
+    admin.refreshPreorderPostAfterStockChange(bot, [{ name: 'Chicken Rice', oldStock: 4, newStock: 0 }])
+  );
+  assert.equal(statsCalls.length, 0); // not counted as a sell-out in Stats either
 });
 
 

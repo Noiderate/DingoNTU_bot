@@ -4,6 +4,7 @@ const menuStore = require('../services/menuStore');
 const { isTemporarilyUnavailable } = require('../utils/unavailable');
 const { CALLBACKS } = require('../config/constants');
 const orderWindow = require('../services/orderWindow');
+const botPause = require('../services/botPause');
 const { editMessageTextSafely } = require('../utils/telegramEdits');
 const orderStore = require('../services/orderStore');
 const repo = require('../services/orderRepository');
@@ -48,6 +49,19 @@ const STATUS_LABELS = {
 async function isOrderingOpen() {
   return orderWindow.isOrderingOpen();
 }
+
+/**
+ * What to tell a customer who can't order right now. Only read once ordering
+ * is already known to be closed, so the normal path pays nothing for it.
+ * While an admin has stopped the bot, they're pointed at that admin instead
+ * of being told to wait for the next window.
+ */
+async function orderingClosedText(fallback = ORDERING_NOT_OPEN_TEXT) {
+  const pause = await botPause.getPause();
+  return pause ? botPause.customerPausedText(pause) : fallback;
+}
+
+const ORDERING_NOT_OPEN_ALERT = 'Ordering is not open yet.';
 
 
 // --- Phone number collection ---------------------------------------------------
@@ -235,7 +249,7 @@ function buildFoodKeyboard(foodItems) {
 async function showOrderScreen(bot, chatId, userId, messageId) {
   if (!await isOrderingOpen()) {
     await cartStore.clearCart(userId);
-    await editMessageTextSafely(bot, ORDERING_NOT_OPEN_TEXT, { chat_id: chatId, message_id: messageId });
+    await editMessageTextSafely(bot, await orderingClosedText(), { chat_id: chatId, message_id: messageId });
     return;
   }
 
@@ -328,7 +342,7 @@ async function deletePreviousMenu(bot, userId) {
 async function sendHallMenu(bot, chatId, userId) {
   // Re-checked because a phone-number reply can arrive well after /start.
   if (!await isOrderingOpen()) {
-    await bot.sendMessage(chatId, ORDERING_NOT_OPEN_TEXT);
+    await bot.sendMessage(chatId, await orderingClosedText());
     return;
   }
 
@@ -397,7 +411,7 @@ async function routeUserCommand(bot, msg) {
     await deletePreviousMenu(bot, userId);
 
     if (!await isOrderingOpen()) {
-      await bot.sendMessage(chatId, ORDERING_NOT_OPEN_TEXT);
+      await bot.sendMessage(chatId, await orderingClosedText());
       return true;
     }
 
@@ -574,7 +588,7 @@ async function handleSelectHall(bot, query, chatId, userId, data) {
   }
 
   if (!await isOrderingOpen()) {
-    await answerCallbackSafely(bot, query.id, 'Ordering is not open yet.', { show_alert: true });
+    await answerCallbackSafely(bot, query.id, await orderingClosedText(ORDERING_NOT_OPEN_ALERT), { show_alert: true });
     return true;
   }
 
@@ -602,7 +616,7 @@ async function handleAddFood(bot, query, chatId, userId, data) {
   }
 
   if (!await isOrderingOpen()) {
-    await answerCallbackSafely(bot, query.id, 'Ordering is not open yet.', { show_alert: true });
+    await answerCallbackSafely(bot, query.id, await orderingClosedText(ORDERING_NOT_OPEN_ALERT), { show_alert: true });
     await showOrderScreen(bot, chatId, userId, query.message.message_id);
     return true;
   }
@@ -724,7 +738,7 @@ async function handleConfirmOrder(bot, query, chatId, userId) {
       }
 
       if (!await isOrderingOpen()) {
-        await answerOrSend(bot, query, 'Ordering is not open yet.', { show_alert: true });
+        await answerOrSend(bot, query, await orderingClosedText(ORDERING_NOT_OPEN_ALERT), { show_alert: true });
         await showOrderScreen(bot, chatId, userId, query.message.message_id);
         return null;
       }

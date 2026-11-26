@@ -158,6 +158,22 @@ async function getCartsForHall(hallName) {
   return rows.map(row => row.telegram_user_id);
 }
 
+/** Every customer with an open (unexpired) cart, whatever hall - for Stop Bot. */
+async function getOpenCartUserIds() {
+  const supabase = getSupabase();
+  const nowIso = new Date().toISOString();
+
+  const rows = unwrap(
+    await supabase
+      .from('carts')
+      .select('telegram_user_id')
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`),
+    'cartStore.getOpenCartUserIds'
+  );
+
+  return rows.map(row => row.telegram_user_id);
+}
+
 async function clearCart(telegramUserId) {
   const supabase = getSupabase();
 
@@ -223,6 +239,7 @@ module.exports = {
   clearItems,
   clearCart,
   getCartsForHall,
+  getOpenCartUserIds,
   cartEntries,
   isEmpty,
   findCartMismatch,

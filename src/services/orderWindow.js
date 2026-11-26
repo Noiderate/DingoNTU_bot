@@ -1,5 +1,6 @@
 const { DateTime } = require('luxon');
 const stateStore = require('./stateStore');
+const botPause = require('./botPause');
 const { SGT } = require('../utils/time');
 
 /**
@@ -204,7 +205,12 @@ function isPastCutoff(window, now = nowSgt()) {
  * round already running when this shipped keeps working.
  */
 async function isOrderingOpen(now = nowSgt()) {
-  const window = await getWindow();
+  // Read together so the Stop Bot check adds no extra wait to a customer's tap.
+  const [window, paused] = await Promise.all([getWindow(), botPause.isPaused()]);
+
+  if (paused) {
+    return false;
+  }
 
   if (!window) {
     const post = await stateStore.get(stateStore.KEYS.preorderPost(), null);

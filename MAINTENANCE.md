@@ -693,6 +693,37 @@ Gemini, the scheduler, the sheet-sync queue and the receipt queue, with ✅ / �
   cron-job.org schedule, so change them together.
 - **Google Sheets** does one single-cell read, so it is cheap but not free.
 
+### Something has gone wrong mid-night: Stop Bot
+
+The **🛑 Stop Bot** button at the bottom of the main admin menu (behind a
+confirm screen) stops all new ordering until the end of the service day
+(`SERVICE_DAY_START_HOUR`, default 3pm). Stopping it:
+
+- refuses every new cart and order; customers are told to message the
+  preorder-post admin tag (or, if none is set, whoever stopped it),
+- edits the channel's preorder post to "please message @admin to order" and
+  removes its button,
+- clears every open cart and tells those customers; customers with an order
+  still mid-payment are told it is saved (paid orders get no message),
+- sends every admin the orders still to deliver, grouped by hall in the Hall
+  sheet's order, with item totals per hall,
+- closes the round (order window → `closed`) and blocks Post: Orders Open,
+  Extend, the stage-2 post (button and `/skip`) and the "post orders"
+  reminders.
+
+Orders already placed are **not** cancelled or restocked, and payment
+verification keeps running. Delivery-mode posts (get ready / coming / here)
+still work, so the night can be finished by hand.
+
+**▶️ Resume Bot** (same place, also confirmed) lifts it early and puts the
+order window back as it was, unless an admin started a new round meanwhile; a
+stage-1 window whose cutoff passed during the stop just stays closed.
+Customers are not re-notified. If the pause lifts on its own, the round stays
+closed and the post reads "Ordering is now closed".
+
+Stuck? The pause is the `bot:pause` row in `bot_state`; deleting it resumes
+the bot (the window stays `closed`). See `src/services/botPause.js`.
+
 ### Payments are not being verified
 
 0. Send `/status` first.
@@ -1026,6 +1057,36 @@ An honest list.
 ---
 
 ## 10. Change log
+
+**2026-11-26 — Stop Bot / Resume Bot emergency switch**
+
+- New **🛑 Stop Bot** button on the main admin menu, with a confirm screen.
+  Pauses ordering until the end of the service day, edits the channel post
+  to "please message @admin to order" (no button), clears open carts and
+  notifies those customers, tells mid-payment customers their order is
+  saved, and DMs every admin the remaining orders in hall order. Swaps to
+  **▶️ Resume Bot** while stopped. See the "Stop Bot" runbook in §4.
+- New `src/services/botPause.js`; `orderWindow.isOrderingOpen` now also
+  checks the pause. `renderPreorderContent` renders the paused post first,
+  whatever the stage. Sold-out announcements are suppressed while stopped.
+- New state key `bot:pause` (TTL = end of service day) and lock
+  `bot:pause_toggle`. New `cartStore.getOpenCartUserIds`.
+- No schema changes.
+
+**2026-11-26 — Fixed: zeroing stock after Finish Delivery posted "sold out"**
+
+- Bug: after an admin tapped Finish Delivery, editing an item's stock down
+  to 0 (single edit or "Edit All Stock") still sent `🚫 {item} has been sold
+  out!` to the Dingo channel and bumped the Stats sold-out tally, even
+  though no delivery was running. Only the preorder repost was skipped
+  (there was no post left to replace).
+- Fix: `refreshPreorderPostAfterStockChange` (`src/handlers/admin.js`) now
+  only announces a sell-out while a live preorder post exists; otherwise it
+  falls through to the ordinary silent refresh (a no-op with no post).
+  Finish Delivery removes that post, so it doubles as the "delivery is live"
+  signal. A stock edit while ordering is closed but delivery not yet
+  finished still announces, since the post is still up then.
+- No schema changes.
 
 **2026-09-18 — `/skip` command, and logging for a silent auto-advance failure**
 

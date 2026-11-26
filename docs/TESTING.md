@@ -234,6 +234,9 @@ Every one of these must behave exactly as it did before the upgrade.
 - [ ] Edit an item's stock to any value **above** 0 (including from 0 back up
       — a restock) — no "sold out" post, and the preorder post is edited in
       place as before (not deleted/resent).
+- [ ] Tap Finish Delivery, then edit an in-stock item's stock to 0 via
+      Manage Food (single edit and "Edit All Stock") — **nothing** is posted
+      to the Dingo channel, and the Stats sold-out tally doesn't change.
 - [ ] Place one order that empties **two different items** at once (e.g. the
       last of both Chicken Rice and Iced Milo) — two separate "sold out"
       posts, one per item, but only **one** fresh preorder post.
@@ -245,6 +248,30 @@ Every one of these must behave exactly as it did before the upgrade.
       back to 0 in the same action, is **not** re-announced unless it
       actually starts the batch above 0 — confirms the check is "crossed
       from >0 to 0", not just "ended at 0".
+
+### 7b. Stop Bot
+
+Set it up with stage 1 open, one customer mid-cart (hall picked, items
+added), one with an unpaid order, one with a paid order.
+
+- [ ] Tap 🛑 Stop Bot. A confirm screen appears; ✖️ Cancel returns to the
+      menu with nothing changed.
+- [ ] Confirm. The channel post now reads "please message @{tagged admin}
+      to order" with **no** button (check a photo post too: caption changes,
+      photo stays).
+- [ ] The mid-cart customer gets a "your cart has been cleared, please
+      message @…" DM; tapping their old cart buttons or /start gives the same
+      "message @…" reply, never the "next window will open soon" one.
+- [ ] The unpaid customer is told their order code is still saved; the paid
+      customer gets nothing.
+- [ ] Every admin gets the "Bot STOPPED" summary followed by the remaining
+      orders, halls in Hall-sheet order, each with item totals.
+- [ ] The main menu shows the ⏸️ stopped line, ▶️ Resume Bot instead of Stop
+      Bot, and no Extend button. Post: Orders Open, the Delivery Mode spare
+      stock button and `/skip` at the spare-stock step all refuse.
+- [ ] Delivery-mode get ready / coming / here posts still work.
+- [ ] Tap ▶️ Resume Bot and confirm. Stage 1 (before its cutoff) reopens and
+      the channel post gets its button back; all admins are told.
 
 ## 8. Delivery mode
 

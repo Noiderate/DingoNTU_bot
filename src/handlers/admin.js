@@ -16,6 +16,7 @@ const orderActions = require('../services/orderActions');
 const repo = require('../services/orderRepository');
 const stateStore = require('../services/stateStore');
 const orderWindow = require('../services/orderWindow');
+const botPause = require('../services/botPause');
 const { DateTime } = require('luxon');
 const { SGT } = require('../utils/time');
 const cartStore = require('../services/cartStore');
@@ -396,6 +397,22 @@ async function buildStageTwoMessageText(adminUsername) {
  * a photo in Settings - the post is then that photo with the text as caption.
  */
 async function renderPreorderContent(bot, hallLabel, options = {}) {
+  // Stop Bot: whatever stage the night was in, the post just points at the
+  // admin and has no button. A photo stays (an edit can't remove it).
+  const pause = options.pause !== undefined ? options.pause : await botPause.getPause();
+
+  if (pause) {
+    const post = await getPreorderPost();
+    const pausedPhoto = post.photoFileId || null;
+    const text = escapeHtml(botPause.channelPausedText(pause));
+    return {
+      text,
+      photoFileId: pausedPhoto,
+      button: null,
+      contentHash: `paused::${text}::${pausedPhoto || ''}`,
+    };
+  }
+
   const window = await orderWindow.getWindow();
   const stage = options.stage || (window && window.stage) || null;
 
@@ -513,15 +530,23 @@ async function renderPreorderPost(bot) {
     return { skipped: 'no_post' };
   }
 
-  const halls = await googleSheets.getHallsOrThrow();
-  const blocked = await orderStore.loadBlockedHalls();
-  const nextHall = halls.find(hall => !blocked.isBlocked(hall.name));
+  // A paused post names no hall, so it goes out even if every hall is blocked.
+  const pause = await botPause.getPause();
+  let hallLabel = null;
 
-  if (!nextHall) {
-    return { skipped: 'no_unblocked_hall' };
+  if (!pause) {
+    const halls = await googleSheets.getHallsOrThrow();
+    const blocked = await orderStore.loadBlockedHalls();
+    const nextHall = halls.find(hall => !blocked.isBlocked(hall.name));
+
+    if (!nextHall) {
+      return { skipped: 'no_unblocked_hall' };
+    }
+
+    hallLabel = nextHall.shortName || nextHall.name;
   }
 
-  const content = await renderPreorderContent(bot, nextHall.shortName || nextHall.name);
+  const content = await renderPreorderContent(bot, hallLabel, { pause });
   const { contentHash } = content;
 
   if (post.contentHash === contentHash) {
@@ -666,7 +691,14 @@ async function repostPreorderAvailability(bot) {
 async function refreshPreorderPostAfterStockChange(bot, changes) {
   const soldOut = findNewlySoldOutItems(changes);
 
-  if (!soldOut.length) {
+  // No live preorder post means no delivery is running (Finish Delivery
+  // clears it) - an admin zeroing stock then is just tidying the menu, not a
+  // sell-out worth announcing to the channel or counting in Stats. The same
+  // goes while the bot is stopped: nobody can order, so nothing sells out.
+  const post = soldOut.length ? await getPreorderPost() : null;
+  const deliveryLive = Boolean(post && post.msgId) && !await botPause.isPaused();
+
+  if (!soldOut.length || !deliveryLive) {
     await refreshPreorderPost(bot);
     return;
   }
@@ -860,14 +892,28 @@ async function handleAdminPreorderPhoto(bot, msg) {
   return true;
 }
 
-/** The main menu, with "Extend Orders" only while stage 1 ordering is running (or just closed). */
-async function buildMainMenuKeyboard() {
-  return keyboards.mainMenuKeyboard({ showExtend: orderWindow.isExtendable(await orderWindow.getWindow()) });
+function pausedStatusLine(pause) {
+  return `⏸️ Bot is STOPPED until ${botPause.formatUntil(pause)}`
+    + `${pause.pausedBy ? ` (by ${pause.pausedBy})` : ''}. `
+    + `Customers are told to message ${botPause.contactLabel(pause)}.`;
+}
+
+/**
+ * The main menu, with "Extend Orders" only while stage 1 ordering is running
+ * (or just closed), and Stop Bot swapped for Resume Bot while stopped.
+ */
+async function buildMainMenu() {
+  const [window, pause] = await Promise.all([orderWindow.getWindow(), botPause.getPause()]);
+  return {
+    text: menuTexts.mainMenuText(pause ? pausedStatusLine(pause) : null),
+    keyboard: keyboards.mainMenuKeyboard({ showExtend: orderWindow.isExtendable(window), paused: Boolean(pause) }),
+  };
 }
 
 async function showMainAdminMenu(bot, chatId, userId) {
   await reloadAdminIds();
-  await updateMenuMessage(bot, chatId, userId, menuTexts.mainMenuText(), await buildMainMenuKeyboard());
+  const { text, keyboard } = await buildMainMenu();
+  await updateMenuMessage(bot, chatId, userId, text, keyboard);
 }
 
 /**
@@ -880,10 +926,10 @@ async function sendMainAdminMenuAtBottom(bot, chatId, userId) {
   await reloadAdminIds();
 
   const existingId = await getMenuMessageId(userId);
-  const keyboard = await buildMainMenuKeyboard();
+  const { text, keyboard } = await buildMainMenu();
 
   if (existingId && await isMessageLatestInChat(chatId, existingId)) {
-    await updateMenuMessage(bot, chatId, userId, menuTexts.mainMenuText(), keyboard);
+    await updateMenuMessage(bot, chatId, userId, text, keyboard);
     return;
   }
 
@@ -896,7 +942,7 @@ async function sendMainAdminMenuAtBottom(bot, chatId, userId) {
     await clearMenuMessageId(userId);
   }
 
-  const sent = await bot.sendMessage(chatId, menuTexts.mainMenuText(), { reply_markup: keyboard });
+  const sent = await bot.sendMessage(chatId, text, { reply_markup: keyboard });
   await setMenuMessageId(userId, sent.message_id);
   await noteChatMessage(chatId, sent.message_id);
   await clearDeliveryModeViewer(userId);
@@ -1978,6 +2024,11 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     return true;
   }
 
+  if (data === CALLBACKS.ADMIN_PAUSE || data === CALLBACKS.ADMIN_PAUSE_CONFIRM
+    || data === CALLBACKS.ADMIN_RESUME || data === CALLBACKS.ADMIN_RESUME_CONFIRM) {
+    return handlePauseCallback(bot, query, chatId, userId, data, answer);
+  }
+
   if (data === CALLBACKS.ADMIN_RELOAD) {
     const success = await reloadAdminIds();
     await updateMenuMessage(bot, chatId, userId, menuTexts.reloadText(success), keyboards.backToMainMenuKeyboard());
@@ -2855,11 +2906,17 @@ async function runStageOnePost(bot, chatId, answer, actor = null) {
  * retried tick can't double-DM.
  */
 async function runOrderReminders(bot, now = orderWindow.nowSgt()) {
-  const [schedule, window, reminders] = await Promise.all([
+  const [schedule, window, reminders, paused] = await Promise.all([
     orderWindow.getSchedule(),
     orderWindow.getWindow(),
     stateStore.get(stateStore.KEYS.orderReminders(), null),
+    botPause.isPaused(),
   ]);
+
+  // Stopped for the day: don't nag anyone to open ordering.
+  if (paused) {
+    return null;
+  }
 
   const action = orderWindow.reminderAction({ now, postTime: schedule.postTime, window, reminders });
 
@@ -3092,6 +3149,12 @@ async function renderStagePanel(bot, chatId, userId) {
  * that happens first - otherwise the totals here would be last night's.
  */
 async function showStageTwoPanel(bot, chatId, userId, hallId, answer) {
+  // Covers the Delivery Mode button and /skip alike.
+  if (await botPause.isPaused()) {
+    await answer(PAUSED_BLOCKED_ALERT, { show_alert: true });
+    return true;
+  }
+
   const window = await orderWindow.getWindow();
 
   if (window && window.stage === orderWindow.STAGES.STAGE2) {
@@ -3168,7 +3231,22 @@ async function handleStageTwoStockInput(bot, chatId, userId, text, state, messag
   return true;
 }
 
+const PAUSED_BLOCKED_ALERT = '⏸️ The bot is stopped. Tap ▶️ Resume Bot in the main menu first.';
+
+/** Anything that would open ordering again, refused while the bot is stopped. */
+const OPENS_ORDERING = [
+  CALLBACKS.STAGE1_POST,
+  CALLBACKS.STAGE1_POST_CONFIRM,
+  CALLBACKS.STAGE1_EXTEND,
+  CALLBACKS.STAGE2_CONFIRM,
+];
+
 async function handleStageCallbacks(bot, query, chatId, userId, data, answer) {
+  if (OPENS_ORDERING.includes(data) && await botPause.isPaused()) {
+    await answer(PAUSED_BLOCKED_ALERT, { show_alert: true });
+    return true;
+  }
+
   // --- stage 1 ---
   if (data === CALLBACKS.STAGE1_POST) {
     if (await orderWindow.getWindow()) {
@@ -4022,6 +4100,364 @@ async function resetRoundBeforePreorder(bot, notifyChatId) {
 }
 
 
+// --- Stop Bot / Resume Bot -----------------------------------------------------
+//
+// The emergency switch for when something goes wrong mid-night (see
+// services/botPause.js for what "paused" means everywhere else). Stopping:
+//   - refuses all new ordering for the rest of the service day,
+//   - edits the channel's preorder post to "please message @admin to order"
+//     and removes its button,
+//   - clears every open cart and tells those customers to message the admin,
+//   - tells customers with an order still mid-payment that it is still saved,
+//   - sends every admin the orders still to deliver, in hall (route) order.
+// Orders already placed are not touched.
+
+const PAUSE_STATUS_LABELS = {
+  [STATUS.PAID]: '✅ Paid',
+  [STATUS.AWAITING_PAYMENT]: '💳 Unpaid',
+  [STATUS.VERIFYING_PAYMENT]: '🔍 Verifying payment',
+  [STATUS.PAYMENT_FLAGGED]: '👀 Payment flagged',
+};
+
+// Customers who have placed an order but not finished paying for it.
+const MID_PAYMENT_STATUSES = [STATUS.AWAITING_PAYMENT, STATUS.VERIFYING_PAYMENT, STATUS.PAYMENT_FLAGGED];
+
+// Under Telegram's 4096-character limit with room to spare.
+const PAUSE_REPORT_CHUNK_LENGTH = 3900;
+
+function describeActor(actor) {
+  if (!actor) return null;
+  return actor.username ? `@${actor.username}` : (actor.first_name || `admin ${actor.id}`);
+}
+
+/**
+ * The orders still to deliver, grouped by hall in the Hall sheet's order (the
+ * delivery route), with each hall's item totals so a driver can load up from
+ * it directly. A hall no longer on the sheet (renamed or deleted mid-night)
+ * goes at the end rather than being dropped. Pure, for testing.
+ */
+function buildPauseOrdersReport(halls, orders) {
+  if (!orders.length) {
+    return '📋 No orders left to deliver.';
+  }
+
+  const byHall = new Map();
+  for (const order of orders) {
+    const hallName = order.hallName || 'Unknown hall';
+    if (!byHall.has(hallName)) byHall.set(hallName, []);
+    byHall.get(hallName).push(order);
+  }
+
+  const sheetNames = (halls || []).map(hall => hall.name);
+  const ordered = [
+    ...sheetNames.filter(name => byHall.has(name)),
+    ...[...byHall.keys()].filter(name => !sheetNames.includes(name)),
+  ];
+
+  const sections = ordered.map((hallName, index) => {
+    const hallOrders = byHall.get(hallName);
+    const totals = collateRemainingItems(hallOrders).map(([name, qty]) => `${name} x${qty}`).join(', ');
+    const lines = hallOrders.map(order => {
+      const handle = order.username ? `@${order.username}` : (order.userName || `User ${order.userId}`);
+      const status = PAUSE_STATUS_LABELS[order.status] || order.status;
+      return `• ${order.phoneNumber || 'no phone'} ${handle} — ${formatOrderItems(order)} — ${status} (${order.code})`;
+    });
+
+    return `${index + 1}. 🏢 ${hallName} — ${hallOrders.length} order${hallOrders.length === 1 ? '' : 's'}\n`
+      + `Items: ${totals}\n${lines.join('\n')}`;
+  });
+
+  return `📋 Orders still to deliver (${orders.length}), in hall order:\n\n${sections.join('\n\n')}`;
+}
+
+/** Split on line breaks so no message goes over Telegram's length limit. */
+function splitForTelegram(text, max = PAUSE_REPORT_CHUNK_LENGTH) {
+  const chunks = [];
+  let current = '';
+
+  for (const line of text.split('\n')) {
+    const piece = line.length > max ? `${line.slice(0, max - 1)}…` : line;
+    if (current && current.length + 1 + piece.length > max) {
+      chunks.push(current);
+      current = piece;
+    } else {
+      current = current ? `${current}\n${piece}` : piece;
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+async function sendToAllAdmins(bot, text) {
+  for (const adminId of googleSheets.getAdminIds()) {
+    for (const chunk of splitForTelegram(text)) {
+      try {
+        await bot.sendMessage(adminId, chunk);
+      } catch (error) {
+        log('warn', 'pause_admin_notify_failed', { admin_id: adminId, error: error.message });
+        break;
+      }
+    }
+  }
+}
+
+/** The admin customers are told to message: the preorder-post tag, else whoever stopped the bot. */
+async function resolvePauseContact(bot, actor) {
+  try {
+    const tagId = await googleSheets.getPreorderAdminTag();
+    const tagUsername = tagId ? await googleSheets.getAdminUsernameById(bot, tagId) : null;
+    if (tagUsername) return `@${tagUsername}`;
+  } catch (error) {
+    log('warn', 'pause_contact_lookup_failed', { error: error.message });
+  }
+
+  return actor && actor.username ? `@${actor.username}` : null;
+}
+
+/**
+ * Clear every open cart and tell its owner to message the admin, then tell
+ * anyone with an order still mid-payment that it's saved. Best-effort per
+ * customer: one who blocked the bot must not stop the rest.
+ */
+async function notifyCustomersOfPause(bot, pause, activeOrders) {
+  const contact = botPause.contactLabel(pause);
+  let cartsCleared = 0;
+  let ordersNotified = 0;
+
+  let cartUserIds = [];
+  try {
+    cartUserIds = await cartStore.getOpenCartUserIds();
+  } catch (error) {
+    log('error', 'pause_cart_lookup_failed', { error: error.message });
+  }
+
+  for (const telegramUserId of cartUserIds) {
+    try {
+      await cartStore.clearCart(telegramUserId);
+      cartsCleared += 1;
+    } catch (error) {
+      log('warn', 'pause_cart_clear_failed', { telegram_user_id: telegramUserId, error: error.message });
+    }
+    await orderActions.notify(
+      bot,
+      telegramUserId,
+      '⚠️ Sorry - something has gone wrong, so ordering through the bot is paused for today. '
+      + `Your cart has been cleared.\n\nPlease message ${contact} to order.`
+    );
+  }
+
+  const midPayment = new Map();
+  for (const order of activeOrders) {
+    if (MID_PAYMENT_STATUSES.includes(order.status) && order.chatId) {
+      if (!midPayment.has(order.chatId)) midPayment.set(order.chatId, []);
+      midPayment.get(order.chatId).push(order.code);
+    }
+  }
+
+  for (const [chatId, codes] of midPayment) {
+    await orderActions.notify(
+      bot,
+      chatId,
+      '⚠️ Sorry - something has gone wrong, so the bot is paused for today. '
+      + `Your order ${codes.join(', ')} is still saved.\n\nPlease message ${contact} about it.`
+    );
+    ordersNotified += 1;
+  }
+
+  return { cartsCleared, ordersNotified };
+}
+
+/**
+ * Stop the bot for the rest of the service day. Returns { paused: true, ... }
+ * or { paused: false, reason } ('locked' | 'already_paused').
+ */
+async function pauseBot(bot, actor) {
+  const holder = await stateStore.acquireLock(stateStore.LOCKS.botPause(), { leaseMs: 120000 });
+
+  if (!holder) {
+    return { paused: false, reason: 'locked' };
+  }
+
+  try {
+    if (await botPause.isPaused()) {
+      return { paused: false, reason: 'already_paused' };
+    }
+
+    const window = await orderWindow.getWindow();
+    const pause = await botPause.startPause({
+      pausedBy: describeActor(actor),
+      pausedById: actor ? actor.id : null,
+      contact: await resolvePauseContact(bot, actor),
+      previousWindow: window,
+    });
+
+    // Close the round too, so ordering can't quietly reopen when the pause
+    // lifts on its own tomorrow (stage 2 has no cutoff). Resume puts it back.
+    if (window && window.stage !== orderWindow.STAGES.CLOSED) {
+      await orderWindow.setWindow({ ...window, stage: orderWindow.STAGES.CLOSED });
+    }
+
+    log('warn', 'bot_paused', { by: pause.pausedBy, until: pause.until });
+
+    // Each step is isolated: the pause itself is already in force, so a
+    // failure further down must not stop the rest from happening.
+    try {
+      await refreshPreorderPost(bot);
+    } catch (error) {
+      log('error', 'pause_preorder_refresh_failed', { error: error.message });
+    }
+
+    let activeOrders = [];
+    try {
+      activeOrders = await orderStore.getActiveOrders();
+    } catch (error) {
+      log('error', 'pause_orders_lookup_failed', { error: error.message });
+    }
+
+    const notified = await notifyCustomersOfPause(bot, pause, activeOrders);
+
+    let halls = [];
+    try {
+      halls = await googleSheets.getHalls();
+    } catch (error) {
+      log('warn', 'pause_halls_lookup_failed', { error: error.message });
+    }
+
+    await sendToAllAdmins(
+      bot,
+      `🛑 Bot STOPPED by ${pause.pausedBy || 'an admin'} until ${botPause.formatUntil(pause)}.\n`
+      + `• Customers are told to message ${botPause.contactLabel(pause)}.\n`
+      + `• ${notified.cartsCleared} open cart(s) cleared, ${notified.ordersNotified} customer(s) mid-payment told their order is saved.\n`
+      + '• Orders already placed are untouched. Tap ▶️ Resume Bot in the main menu to undo.\n\n'
+      + buildPauseOrdersReport(halls, activeOrders)
+    );
+
+    await refreshDeliveryModeMenus(bot).catch(() => {});
+    return { paused: true, pause, ...notified, orderCount: activeOrders.length };
+  } finally {
+    await stateStore.releaseLock(stateStore.LOCKS.botPause(), holder);
+  }
+}
+
+/**
+ * Lift the pause early. The order window goes back to how it was before the
+ * pause - unless someone has changed it since - so a stage-1 night past its
+ * cutoff simply stays closed.
+ */
+async function resumeBot(bot, actor) {
+  const holder = await stateStore.acquireLock(stateStore.LOCKS.botPause(), { leaseMs: 60000 });
+
+  if (!holder) {
+    return { resumed: false, reason: 'locked' };
+  }
+
+  try {
+    const pause = await botPause.getPause();
+
+    if (!pause) {
+      return { resumed: false, reason: 'not_paused' };
+    }
+
+    await botPause.endPause();
+
+    const previous = pause.previousWindow;
+    const current = await orderWindow.getWindow();
+    const untouched = previous && current
+      && current.stage === orderWindow.STAGES.CLOSED
+      && current.postedAt === previous.postedAt;
+
+    if (untouched && previous.stage !== orderWindow.STAGES.CLOSED) {
+      await orderWindow.setWindow(previous);
+    }
+
+    log('warn', 'bot_resumed', { by: describeActor(actor) });
+
+    // A restored stage 1 whose cutoff passed during the pause closes right away.
+    await enforceOrderCutoff(bot).catch(error => log('warn', 'resume_cutoff_failed', { error: error.message }));
+    await refreshPreorderPost(bot).catch(error => log('error', 'resume_preorder_refresh_failed', { error: error.message }));
+    await refreshDeliveryModeMenus(bot).catch(() => {});
+
+    const open = await orderWindow.isOrderingOpen();
+    await sendToAllAdmins(
+      bot,
+      `▶️ Bot resumed by ${describeActor(actor) || 'an admin'}. `
+      + (open
+        ? 'Ordering is open again and the channel post has its order button back.'
+        : 'Ordering stays closed for now - use the main menu to post or extend orders.')
+    );
+
+    return { resumed: true, open };
+  } finally {
+    await stateStore.releaseLock(stateStore.LOCKS.botPause(), holder);
+  }
+}
+
+async function handlePauseCallback(bot, query, chatId, userId, data, answer) {
+  if (data === CALLBACKS.ADMIN_PAUSE) {
+    if (await botPause.isPaused()) {
+      await showMainAdminMenu(bot, chatId, userId);
+      await answer('The bot is already stopped.');
+      return true;
+    }
+
+    await updateMenuMessage(
+      bot, chatId, userId,
+      '🛑 Stop the bot for today?\n\n'
+      + `Until ${botPause.pauseEndsAt().toFormat('h:mm a ccc')} (the end of this service day):\n`
+      + '• Nobody can order. Customers are told to message the tagged admin.\n'
+      + '• The channel post changes to "please message @admin to order" and loses its button.\n'
+      + '• Open carts are cleared, and customers mid-payment are told their order is saved.\n'
+      + '• Every admin is sent the orders still to deliver, in hall order.\n\n'
+      + 'Orders already placed are NOT cancelled. You can undo this with Resume Bot.',
+      keyboards.pauseConfirmKeyboard(CALLBACKS.ADMIN_PAUSE_CONFIRM, '🛑 Yes, stop the bot')
+    );
+    await answer();
+    return true;
+  }
+
+  if (data === CALLBACKS.ADMIN_PAUSE_CONFIRM) {
+    await answer('Stopping the bot...');
+    const result = await pauseBot(bot, query.from);
+
+    if (!result.paused && result.reason === 'locked') {
+      await bot.sendMessage(chatId, '⏳ Another admin is stopping or resuming the bot right now - check the main menu in a moment.');
+    }
+
+    await showMainAdminMenu(bot, chatId, userId);
+    return true;
+  }
+
+  if (data === CALLBACKS.ADMIN_RESUME) {
+    if (!await botPause.isPaused()) {
+      await showMainAdminMenu(bot, chatId, userId);
+      await answer('The bot is not stopped.');
+      return true;
+    }
+
+    await updateMenuMessage(
+      bot, chatId, userId,
+      '▶️ Resume the bot?\n\n'
+      + 'Ordering goes back to how it was before the stop (if the cutoff has passed, it stays closed), '
+      + 'and the channel post gets its order button back. Customers who were told to message an admin are not re-notified.',
+      keyboards.pauseConfirmKeyboard(CALLBACKS.ADMIN_RESUME_CONFIRM, '▶️ Yes, resume')
+    );
+    await answer();
+    return true;
+  }
+
+  // ADMIN_RESUME_CONFIRM
+  await answer('Resuming...');
+  const result = await resumeBot(bot, query.from);
+
+  if (!result.resumed && result.reason === 'locked') {
+    await bot.sendMessage(chatId, '⏳ Another admin is stopping or resuming the bot right now - check the main menu in a moment.');
+  }
+
+  await showMainAdminMenu(bot, chatId, userId);
+  return true;
+}
+
 async function handleFinishDelivery(bot, query, chatId, userId) {
   await bot.answerCallbackQuery(query.id);
 
@@ -4082,6 +4518,10 @@ module.exports = {
   announceSoldOut,
   repostPreorderAvailability,
   refreshPreorderPostAfterStockChange,
+  pauseBot,
+  resumeBot,
+  buildPauseOrdersReport,
+  splitForTelegram,
   sendPaymentInstructions,
   buildPaymentCaption,
   buildPreorderMessageText,
