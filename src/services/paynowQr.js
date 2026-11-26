@@ -100,12 +100,12 @@ function buildPayNowPayload({ uen, mobile, amountCents, merchantName, reference 
   return withoutCrc + crc16(withoutCrc);
 }
 
-// Matches src/payment_example.png's own dimensions (a typical phone
-// screenshot). Telegram crops photos of mismatched aspect ratio to a common
+// Matches src/payment_example.jpg's shape (1146x2560, halved - a typical
+// phone screenshot). Telegram crops photos of mismatched aspect ratio to a common
 // box when it lays out an album, so a bare square QR next to that portrait
 // screenshot gets cropped off-center; padding the QR onto a canvas of the
 // same shape keeps Telegram trimming whitespace instead of the code itself.
-const CANVAS_WIDTH = 582;
+const CANVAS_WIDTH = 573;
 const CANVAS_HEIGHT = 1280;
 const QR_PIXEL_SIZE = 480;
 

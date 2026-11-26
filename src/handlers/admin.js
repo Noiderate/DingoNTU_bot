@@ -1505,7 +1505,7 @@ function buildPaymentCaption(order) {
   // The total sits with the instructions rather than in the item summary, so
   // trimming a long item list below can never cut it off.
   const instructions = `\n💰 Total: ${formatCents(order.totalCents)}\n\n${PAY_WITH_QR_LINE}\n`
-    + '2️⃣ Send an UNCROPPED screenshot showing date, time, amount and recipient (swipe for example)\n\n'
+    + '2️⃣ Send an UNCROPPED screenshot showing date, time, amount, recipient and reference no. (swipe for example)\n\n'
     + (config.payment.expiryEnabled ? `⚠️ Pay within ${config.payment.windowMinutes} min.` : 'Send your screenshot after paying.');
   const summary = order.items
     .map(item => `• ${item.name} x${item.quantity} = ${formatCents(item.lineTotalCents)}`)
@@ -1525,8 +1525,10 @@ function buildPaymentCaption(order) {
   return heading + displayed + instructions;
 }
 
-const PAYMENT_EXAMPLE_IMAGE = 'src/payment_example.png';
-const PAYMENT_EXAMPLE_CAPTION = '📸 Example of a valid screenshot — yours should show the date, time, amount and who it was paid to, just like this:';
+// Replacing this image? Also bump KEYS.paymentExampleImageFileId in
+// stateStore, or the old picture's cached Telegram file_id keeps being sent.
+const PAYMENT_EXAMPLE_IMAGE = 'src/payment_example.jpg';
+const PAYMENT_EXAMPLE_CAPTION = '📸 Example of a valid screenshot — yours should show the date, time, amount, who it was paid to and the reference number, just like this:';
 
 /**
  * Generate this order's PayNow QR (amount and order code baked in) as a media

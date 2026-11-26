@@ -146,5 +146,5 @@ test('large orders fit a photo caption while keeping payment instructions and to
   assert(caption.length <= 1024);
   assert.match(caption, /Full order: \/orders/);
   assert.match(caption, /Total: .*5.00/);
-  assert.match(caption, /UNCROPPED screenshot showing date, time, amount and recipient/);
+  assert.match(caption, /UNCROPPED screenshot showing date, time, amount, recipient and reference no\./);
 });

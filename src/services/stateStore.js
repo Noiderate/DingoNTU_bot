@@ -86,7 +86,9 @@ const KEYS = {
   // Cached t.me deep link and payment-image file_id, to avoid repeat API calls.
   botStartUrl: () => 'cache:bot_start_url',
   paymentImageFileId: () => 'cache:payment_image_file_id',
-  paymentExampleImageFileId: () => 'cache:payment_example_image_file_id',
+  // Versioned: bump the suffix whenever src/payment_example.* is replaced, so
+  // the previous picture's cached file_id (kept 30 days) is not reused.
+  paymentExampleImageFileId: () => 'cache:payment_example_image_file_id:v2',
 };
 
 async function get(key, fallback = null) {

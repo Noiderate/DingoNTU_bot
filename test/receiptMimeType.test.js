@@ -10,7 +10,7 @@ const { detectImageMimeType } = require('../src/services/paymentVerifier');
  */
 
 test('a PNG receipt is recognised as PNG', () => {
-  const png = fs.readFileSync(path.join(__dirname, '..', 'src', 'payment_example.png'));
+  const png = fs.readFileSync(path.join(__dirname, '..', 'src', 'dingo_qr_code.png'));
   assert.equal(detectImageMimeType(png), 'image/png');
 });
 

@@ -232,8 +232,14 @@ The fallback chain, each step only reached if the one before it fails:
 4. Plain text with the amount, if no image could be sent at all.
 
 A stale cached example `file_id` is retried once with a fresh upload of
-`src/payment_example.png` before a QR candidate is given up on, so a bad
+`src/payment_example.jpg` before a QR candidate is given up on, so a bad
 example cache entry alone can't sink delivery either.
+
+**Replacing the example screenshot:** overwrite `src/payment_example.jpg`
+(or update `PAYMENT_EXAMPLE_IMAGE` in `admin.js` and `includeFiles` in
+`vercel.json` if the name changes) **and** bump the version suffix on
+`KEYS.paymentExampleImageFileId` in `stateStore.js`. Otherwise the old
+picture's cached `file_id` keeps being sent for up to 30 days.
 
 ### 3.2 Stale or stuck state
 

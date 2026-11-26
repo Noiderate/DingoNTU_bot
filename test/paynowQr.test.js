@@ -96,6 +96,6 @@ test('the QR is padded onto a portrait canvas matching the example screenshot, s
   // the signature and chunk header.
   const width = buffer.readUInt32BE(16);
   const height = buffer.readUInt32BE(20);
-  assert.equal(width, 582);
+  assert.equal(width, 573);
   assert.equal(height, 1280);
 });
