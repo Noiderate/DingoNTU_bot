@@ -113,6 +113,47 @@ function parseReceiptDateTime(text) {
   return iso.isValid ? iso.toUTC().toJSDate() : null;
 }
 
+const RECEIPT_DATE_FORMATS = ['d MMM yyyy', 'd MMMM yyyy', 'dd/MM/yyyy', 'd/M/yyyy', 'dd-MM-yyyy', 'yyyy-MM-dd'];
+
+/**
+ * The Singapore calendar date a receipt shows, as YYYY-MM-DD, for receipts
+ * that print a date but no time (e.g. OCBC: "When: 26 Nov 2026"). Accepts the
+ * extractor's structured `date`, falling back to the text as printed; if that
+ * text also carries a time, only its date part is used.
+ */
+function parseReceiptDate(date, text) {
+  if (date) {
+    const dt = DateTime.fromFormat(String(date).trim(), 'yyyy-MM-dd', { zone: SGT });
+    if (dt.isValid) {
+      return dt.toISODate();
+    }
+  }
+
+  if (text) {
+    const withTime = parseReceiptDateTime(text);
+    if (withTime) {
+      return DateTime.fromJSDate(withTime, { zone: SGT }).toISODate();
+    }
+    const cleaned = String(text).replace(/\s+/g, ' ').replace(/^on /i, '').trim();
+    for (const format of RECEIPT_DATE_FORMATS) {
+      const dt = DateTime.fromFormat(cleaned, format, { zone: SGT });
+      if (dt.isValid) {
+        return dt.toISODate();
+      }
+    }
+  }
+
+  return null;
+}
+
+/** The Singapore calendar date of an instant, as YYYY-MM-DD. */
+function sgtIsoDate(value) {
+  const dt = value instanceof Date
+    ? DateTime.fromJSDate(value, { zone: SGT })
+    : DateTime.fromISO(String(value), { zone: SGT });
+  return dt.isValid ? dt.toISODate() : null;
+}
+
 /**
  * Receipts commonly show times to the minute only, so comparisons are done at
  * minute granularity. Without this, a receipt reading 14:05 would be treated as
@@ -144,6 +185,8 @@ module.exports = {
   formatSgtFriendly,
   sgtDateTimeToUtc,
   parseReceiptDateTime,
+  parseReceiptDate,
+  sgtIsoDate,
   truncateToMinute,
   sgtDateParts,
 };

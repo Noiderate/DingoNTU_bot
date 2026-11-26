@@ -52,6 +52,7 @@ const RECEIPT_SCHEMA = {
     transaction_time: { type: Type.STRING, nullable: true },
     reference_label: { type: Type.STRING, nullable: true },
     reference_id: { type: Type.STRING, nullable: true },
+    bill_reference: { type: Type.STRING, nullable: true },
     appears_cropped: { type: Type.BOOLEAN },
     appears_edited_or_composited: { type: Type.BOOLEAN },
     missing_required_fields: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -95,8 +96,17 @@ recipient_uen is ONLY the payee's own UEN, shown next to the recipient's name
 (e.g. "To: ACME PTE LTD, UEN 201912345A"). Some banks show a field labelled
 "UEN/Bill Reference No." or "Bill reference": that holds a reference the
 payer's QR or the payer entered (often an order code like DG20261126-10), NOT
-the recipient's UEN - never put it in recipient_uen. For reference_id prefer
-the bank's own transaction reference (e.g. "Transaction Ref. No.").
+the recipient's UEN - never put it in recipient_uen.
+
+bill_reference is any order code / bill reference / payment comment shown,
+e.g. "DG20261126-14", whatever the bank labels it ("Reference number",
+"UEN/Bill Reference No.", "Comments"). Copy it exactly. For reference_id
+prefer the bank's own transaction reference (e.g. "Transaction Ref. No.",
+"Transaction ID"); if the only reference shown is the order code, use it for
+both.
+
+If the receipt shows a date but no time, fill transaction_date and leave
+transaction_time null. Never invent a time.
 
 Set appears_edited_or_composited true only on real visual evidence of
 tampering: mismatched fonts, misaligned text baselines, inconsistent
@@ -194,6 +204,7 @@ function validateExtraction(raw) {
     transaction_time: str(raw.transaction_time),
     reference_label: str(raw.reference_label),
     reference_id: str(raw.reference_id),
+    bill_reference: str(raw.bill_reference),
     appears_cropped: raw.appears_cropped === true,
     appears_edited_or_composited: raw.appears_edited_or_composited === true,
     missing_required_fields: Array.isArray(raw.missing_required_fields)

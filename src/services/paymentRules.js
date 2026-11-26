@@ -1,5 +1,7 @@
 const { parseDisplayedAmount } = require('../utils/money');
-const { sgtDateTimeToUtc, parseReceiptDateTime, truncateToMinute } = require('../utils/time');
+const {
+  sgtDateTimeToUtc, parseReceiptDateTime, parseReceiptDate, sgtIsoDate, truncateToMinute,
+} = require('../utils/time');
 
 /**
  * The deterministic payment decision engine.
@@ -232,6 +234,29 @@ function resolveTransactionTime(extraction) {
   return parseReceiptDateTime(extraction.transaction_datetime_text);
 }
 
+/**
+ * Whether this order's own code (e.g. DG20261126-14) is printed on the
+ * receipt. Our PayNow QR sets it as the bill reference, and banks show it as
+ * "Reference number", "UEN/Bill Reference No." or similar.
+ *
+ * Exact match per token, never a substring: DG20261126-1 must not match a
+ * receipt for DG20261126-14.
+ */
+function receiptShowsOrderCode(extraction, orderCode) {
+  const wanted = normalizeReference(orderCode);
+  if (!wanted) {
+    return false;
+  }
+
+  return [extraction.bill_reference, extraction.reference_id, extraction.recipient_uen]
+    .filter(Boolean)
+    .some(value => {
+      const text = String(value);
+      return normalizeReference(text) === wanted
+        || text.split(/[\s,;:|()]+/).some(token => normalizeReference(token) === wanted);
+    });
+}
+
 
 // --- The decision ------------------------------------------------------------
 
@@ -312,8 +337,22 @@ function evaluatePayment({
 
   // --- Timestamp ---
   const txnAt = truncateToMinute(resolveTransactionTime(extraction));
+  const orderCodeShown = receiptShowsOrderCode(extraction, order.code);
+  const txnDate = txnAt ? null : parseReceiptDate(extraction.transaction_date, extraction.transaction_datetime_text);
 
-  if (!txnAt) {
+  if (!txnAt && txnDate && orderCodeShown) {
+    // Date but no time (OCBC prints only "26 Nov 2026"). The time check exists
+    // to stop recycled old receipts, and a receipt carrying this order's own
+    // code cannot predate the order - the code didn't exist yet - while the
+    // duplicate guard stops it being reused. So the date only has to fall
+    // between the day the order was placed and the day it was sent.
+    if (txnDate < sgtIsoDate(order.created_at)) {
+      reasons.add(REASONS.TIMESTAMP_BEFORE_ORDER);
+    }
+    if (txnDate > sgtIsoDate(receivedAt)) {
+      reasons.add(REASONS.TIMESTAMP_IN_FUTURE);
+    }
+  } else if (!txnAt) {
     reasons.add(REASONS.TIMESTAMP_UNREADABLE);
   } else {
     const skewMs = rules.clockSkewMinutes * 60 * 1000;
@@ -375,6 +414,9 @@ function evaluatePayment({
     amountCents,
     currency,
     txnAt,
+    // Set only for a date-only receipt accepted on its order code.
+    txnDate: txnAt ? null : txnDate,
+    orderCodeShown,
     referenceNormalized,
     referenceRaw: extraction.reference_id || null,
     recipientName: extraction.recipient_name || null,

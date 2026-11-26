@@ -1078,6 +1078,20 @@ An honest list.
 
 ## 10. Change log
 
+**2026-11-26 — Date-only receipts (OCBC) accepted when they show the order code**
+
+- OCBC prints only a date ("When: 26 Nov 2026"), so every OCBC receipt was
+  flagged `TIMESTAMP_UNREADABLE`.
+- Our PayNow QR sets the order code as the bill reference, and Gemini now
+  returns it as `bill_reference`. If a receipt has a date but no time **and**
+  shows this order's exact code, the time check is replaced by: date is on or
+  after the day the order was placed, and on or before the day it was sent.
+  The code can't exist before the order, and the duplicate guard stops reuse,
+  which is what the time window was protecting against.
+- No code on the receipt (e.g. paid by typing the UEN by hand) → still
+  `TIMESTAMP_UNREADABLE` → admin. Receipts that do show a time are unchanged.
+- The order-code match is exact per token: `DG…-1` never matches `DG…-14`.
+
 **2026-11-26 — Order code under "UEN/Bill Reference No." no longer fails the recipient check**
 
 - DBS/POSB receipts show the bill reference our PayNow QR sets (the order

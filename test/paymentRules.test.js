@@ -211,6 +211,73 @@ test('every Singapore UEN shape is still checked against ours', () => {
   }
 });
 
+// --- Date-only receipts (OCBC: "When: 26 Nov 2026", no time) -------------------
+
+const CODE_ORDER = { ...ORDER, code: 'DG20260916-14' };
+
+function evaluateDateOnly(overrides = {}, order = CODE_ORDER) {
+  return evaluatePayment({
+    extraction: makeExtraction({
+      transaction_time: null,
+      transaction_date: '2026-09-16',
+      transaction_datetime_text: '16 Sep 2026',
+      bill_reference: 'DG20260916-14',
+      ...overrides,
+    }),
+    order,
+    rules: RULES,
+    now: RECEIVED_AT,
+    receivedAt: RECEIVED_AT,
+  });
+}
+
+test('a date-only receipt showing this order\'s code is approved', () => {
+  const result = evaluateDateOnly();
+  assert.equal(result.outcome, OUTCOMES.AUTO_APPROVED);
+  assert.equal(result.normalized.txnDate, '2026-09-16');
+  assert.equal(result.normalized.orderCodeShown, true);
+});
+
+test('the order code counts wherever the bank printed it', () => {
+  assert.equal(evaluateDateOnly({ bill_reference: null, reference_id: 'DG20260916-14' }).outcome, OUTCOMES.AUTO_APPROVED);
+  assert.equal(evaluateDateOnly({ bill_reference: 'dg20260916 14' }).outcome, OUTCOMES.AUTO_APPROVED);
+  assert.equal(evaluateDateOnly({ bill_reference: 'Ref: DG20260916-14' }).outcome, OUTCOMES.AUTO_APPROVED);
+});
+
+test('a date-only receipt without the order code still goes to an admin', () => {
+  const result = evaluateDateOnly({ bill_reference: null });
+  assert.equal(result.outcome, OUTCOMES.FLAGGED);
+  assert.ok(result.reasons.includes(REASONS.TIMESTAMP_UNREADABLE));
+});
+
+test('another order\'s code does not count, even one that starts the same', () => {
+  const order1 = { ...ORDER, code: 'DG20260916-1' };
+  const result = evaluateDateOnly({ bill_reference: 'DG20260916-14' }, order1);
+  assert.equal(result.outcome, OUTCOMES.FLAGGED);
+  assert.ok(result.reasons.includes(REASONS.TIMESTAMP_UNREADABLE));
+});
+
+test('a date-only receipt dated before the order or after it was sent is flagged', () => {
+  const before = evaluateDateOnly({ transaction_date: '2026-09-15', transaction_datetime_text: '15 Sep 2026' });
+  assert.ok(before.reasons.includes(REASONS.TIMESTAMP_BEFORE_ORDER));
+  assert.equal(before.outcome, OUTCOMES.FLAGGED);
+
+  const after = evaluateDateOnly({ transaction_date: '2026-09-17', transaction_datetime_text: '17 Sep 2026' });
+  assert.ok(after.reasons.includes(REASONS.TIMESTAMP_IN_FUTURE));
+  assert.equal(after.outcome, OUTCOMES.FLAGGED);
+});
+
+test('the date is read from the printed text when the model gave no structured date', () => {
+  const result = evaluateDateOnly({ transaction_date: null, transaction_datetime_text: '16 Sep 2026' });
+  assert.equal(result.outcome, OUTCOMES.AUTO_APPROVED);
+});
+
+test('a receipt with a full time is still held to the time window, code or not', () => {
+  const result = evaluateDateOnly({ transaction_time: '09:00', transaction_datetime_text: '16 Sep 2026, 9:00 AM' });
+  assert.equal(result.outcome, OUTCOMES.FLAGGED);
+  assert.ok(result.reasons.includes(REASONS.TIMESTAMP_BEFORE_ORDER));
+});
+
 test('recipient matches by masked proxy tail', () => {
   const rules = { ...RULES, recipientNames: [], recipientAliases: [], proxyNumber: '91234567' };
   const result = evaluatePayment({

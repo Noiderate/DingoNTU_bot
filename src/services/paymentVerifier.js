@@ -705,7 +705,7 @@ async function processSubmission(bot, submissionId, {
 
     const decision = evaluatePayment({
       extraction: extractionResult.extraction,
-      order: { total_cents: order.totalCents, created_at: order.createdAt },
+      order: { total_cents: order.totalCents, created_at: order.createdAt, code: order.code },
       rules: config.payment,
       now: new Date(),
       receivedAt: new Date(submission.received_at),
