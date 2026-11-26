@@ -1078,6 +1078,19 @@ An honest list.
 
 ## 10. Change log
 
+**2026-11-26 — Order code under "UEN/Bill Reference No." no longer fails the recipient check**
+
+- DBS/POSB receipts show the bill reference our PayNow QR sets (the order
+  code, e.g. `DG20261126-10`) under the label "UEN/Bill Reference No.". The
+  model read it as the payee's UEN, and since the UEN is checked before the
+  name, every such receipt was flagged `RECIPIENT_MISMATCH`.
+- `matchRecipient` now ignores an extracted UEN that isn't shaped like a
+  Singapore UEN and falls back to the name/proxy check. A real UEN that
+  differs from `PAYNOW_UEN` is still a mismatch. The Gemini prompt also says
+  a bill-reference field is not the recipient UEN.
+- To confirm on a flagged submission: `extracted_recipient_uen` in
+  `payment_submissions` showed the order code.
+
 **2026-11-26 — No reference number: ask the customer before the admins**
 
 - A receipt whose only problem is a missing reference number is now sent

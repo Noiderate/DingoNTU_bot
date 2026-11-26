@@ -91,6 +91,13 @@ Classify transfer_status carefully. This matters more than any other field:
 - "failed" for declined, failed or cancelled transfers.
 - "unknown" if you genuinely cannot tell.
 
+recipient_uen is ONLY the payee's own UEN, shown next to the recipient's name
+(e.g. "To: ACME PTE LTD, UEN 201912345A"). Some banks show a field labelled
+"UEN/Bill Reference No." or "Bill reference": that holds a reference the
+payer's QR or the payer entered (often an order code like DG20261126-10), NOT
+the recipient's UEN - never put it in recipient_uen. For reference_id prefer
+the bank's own transaction reference (e.g. "Transaction Ref. No.").
+
 Set appears_edited_or_composited true only on real visual evidence of
 tampering: mismatched fonts, misaligned text baselines, inconsistent
 backgrounds, or visible clone-stamping.

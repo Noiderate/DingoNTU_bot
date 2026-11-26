@@ -168,6 +168,49 @@ test('a wrong UEN is a mismatch even when the name looks right', () => {
   assert.ok(result.reasons.includes(REASONS.RECIPIENT_MISMATCH));
 });
 
+// The live DBS/POSB receipt: our QR puts the order code under "UEN/Bill
+// Reference No.", which the model may read as the payee's UEN.
+const DINGO_RULES = { ...RULES, recipientNames: ['DINGO FOODS'], recipientAliases: [], uen: '53469488L' };
+
+function evaluateDingo(overrides) {
+  return evaluatePayment({
+    extraction: makeExtraction({ recipient_name: 'DINGO FOODS', ...overrides }),
+    order: ORDER,
+    rules: DINGO_RULES,
+    now: RECEIVED_AT,
+    receivedAt: RECEIVED_AT,
+  });
+}
+
+test('an order code read from "UEN/Bill Reference No." is not taken as the payee UEN', () => {
+  const result = evaluateDingo({ recipient_uen: 'DG20261126-10' });
+  assert.equal(result.outcome, OUTCOMES.AUTO_APPROVED);
+  assert.ok(!result.reasons.includes(REASONS.RECIPIENT_MISMATCH));
+});
+
+test('an order code in the UEN field does not rescue a wrong payee name', () => {
+  const result = evaluateDingo({ recipient_name: 'Bob Tan', recipient_uen: 'DG20261126-10' });
+  assert.equal(result.outcome, OUTCOMES.FLAGGED);
+  assert.ok(result.reasons.includes(REASONS.RECIPIENT_MISMATCH));
+});
+
+test('a real but different UEN is still a mismatch, even with our name', () => {
+  const result = evaluateDingo({ recipient_uen: '12345678K' });
+  assert.equal(result.outcome, OUTCOMES.FLAGGED);
+  assert.ok(result.reasons.includes(REASONS.RECIPIENT_MISMATCH));
+});
+
+test('every Singapore UEN shape is still checked against ours', () => {
+  for (const uen of ['53469488L', '201912345A', 'T08LL1234A', 'S99FC0001Z']) {
+    const rules = { ...DINGO_RULES, uen };
+    const result = evaluatePayment({
+      extraction: makeExtraction({ recipient_name: 'Someone Else', recipient_uen: uen.toLowerCase() }),
+      order: ORDER, rules, now: RECEIVED_AT, receivedAt: RECEIVED_AT,
+    });
+    assert.equal(result.outcome, OUTCOMES.AUTO_APPROVED, uen);
+  }
+});
+
 test('recipient matches by masked proxy tail', () => {
   const rules = { ...RULES, recipientNames: [], recipientAliases: [], proxyNumber: '91234567' };
   const result = evaluatePayment({

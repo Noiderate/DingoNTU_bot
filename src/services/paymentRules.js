@@ -106,6 +106,23 @@ function normalizeUen(raw) {
 }
 
 /**
+ * Whether a normalised value has the shape of a Singapore UEN:
+ *   nnnnnnnnX    businesses (8 digits + check letter)
+ *   yyyynnnnnX   local companies (9 digits + check letter)
+ *   TyyPQnnnnX   other entities (T/S/R, year, 2-char entity type, 4 digits, letter)
+ *
+ * Needed because DBS/POSB label the bill reference "UEN/Bill Reference No.",
+ * and our PayNow QR puts the order code (e.g. DG20261126-10) there. Without
+ * this check that order code was read as the payee's UEN and every such
+ * receipt failed as a recipient mismatch.
+ */
+const UEN_PATTERN = /^(\d{8}[A-Z]|\d{9}[A-Z]|[RST]\d{2}[A-Z0-9]{2}\d{4}[A-Z])$/;
+
+function isPlausibleUen(normalized) {
+  return Boolean(normalized) && UEN_PATTERN.test(normalized);
+}
+
+/**
  * Compare a possibly-masked proxy (mobile number or account) against the
  * configured values.
  *
@@ -152,7 +169,10 @@ function proxyMatches(rawProxy, candidates) {
  */
 function matchRecipient(extraction, rules) {
   const configuredUen = normalizeUen(rules.uen);
-  const extractedUen = normalizeUen(extraction.recipient_uen);
+  // Something in the UEN field that isn't shaped like a UEN (an order code, a
+  // bill reference) says nothing about the payee: fall through to the name.
+  const rawExtractedUen = normalizeUen(extraction.recipient_uen);
+  const extractedUen = isPlausibleUen(rawExtractedUen) ? rawExtractedUen : null;
 
   if (configuredUen && extractedUen) {
     return extractedUen === configuredUen
