@@ -286,10 +286,31 @@ test('DD/MM is not misread as MM/DD', () => {
 
 // --- Reference and duplicates ------------------------------------------------
 
-test('a missing reference always reaches a human', () => {
+test('a missing reference on an otherwise good receipt goes back to the customer first', () => {
   const result = evaluate({ reference_id: null });
+  assert.equal(result.outcome, OUTCOMES.MISSING_REFERENCE);
+  assert.ok(result.reasons.includes(REASONS.MISSING_REFERENCE));
+});
+
+test('a second screenshot with no reference reaches a human (some banks never print one)', () => {
+  const result = evaluate({ reference_id: null }, { missingReferenceAttempts: 1 });
   assert.equal(result.outcome, OUTCOMES.FLAGGED);
   assert.ok(result.reasons.includes(REASONS.MISSING_REFERENCE));
+});
+
+test('MAX_MISSING_REFERENCE_ATTEMPTS sets how many go back before a human sees one', () => {
+  const rules = { ...RULES, maxMissingReferenceAttempts: 3 };
+  assert.equal(evaluate({ reference_id: null }, { rules, missingReferenceAttempts: 1 }).outcome, OUTCOMES.MISSING_REFERENCE);
+  assert.equal(evaluate({ reference_id: null }, { rules, missingReferenceAttempts: 2 }).outcome, OUTCOMES.FLAGGED);
+  // 1 turns the hand-back off: straight to a human, as before.
+  assert.equal(evaluate({ reference_id: null }, { rules: { ...RULES, maxMissingReferenceAttempts: 1 } }).outcome, OUTCOMES.FLAGGED);
+});
+
+test('a missing reference alongside any other problem still reaches a human', () => {
+  const result = evaluate({ reference_id: null, amount_value: 5, amount_text: 'S$5.00' });
+  assert.equal(result.outcome, OUTCOMES.FLAGGED);
+  assert.ok(result.reasons.includes(REASONS.MISSING_REFERENCE));
+  assert.ok(result.reasons.includes(REASONS.AMOUNT_MISMATCH));
 });
 
 test('a duplicate reference is rejected, not flagged', () => {
@@ -328,8 +349,14 @@ test('cropping is harmless when nothing required was lost', () => {
 });
 
 test('cropping is fatal when it cost us a required field', () => {
-  const result = evaluate({ appears_cropped: true, reference_id: null });
+  const result = evaluate({ appears_cropped: true, amount_value: null, amount_text: null });
   assert.equal(result.outcome, OUTCOMES.FLAGGED);
+  assert.ok(result.reasons.includes(REASONS.CROPPED));
+});
+
+test('a crop that only hid the reference goes back to the customer to resend', () => {
+  const result = evaluate({ appears_cropped: true, reference_id: null });
+  assert.equal(result.outcome, OUTCOMES.MISSING_REFERENCE);
   assert.ok(result.reasons.includes(REASONS.CROPPED));
 });
 

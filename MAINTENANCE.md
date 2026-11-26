@@ -506,10 +506,23 @@ for a few of them, add the new date format to `RECEIPT_DATETIME_FORMATS` in
 
 ### 3.9 Banks that show no reference number
 
-Some receipts genuinely have none. Those always come back
-`MISSING_REFERENCE` → flagged → manual Accept/Reject. That is intentional: the
-reference is the replay guard, and without it the same screenshot could pay for
-several orders.
+A receipt where the reference is the **only** problem (everything else
+checks out; a crop that hid it counts) is first handed back to the customer,
+like a repeat screenshot: outcome `missing_reference`, order back to
+`awaiting_payment` with a restarted deadline, and a message asking for a
+screenshot that shows the reference number. Usually they just cropped it off.
+
+Some receipts genuinely have none, so once an order has sent
+`MAX_MISSING_REFERENCE_ATTEMPTS` (default 2) such screenshots, the last one is
+flagged `MISSING_REFERENCE` → manual Accept/Reject, and the hand-back message
+before it tells the customer to just resend if their bank shows none.
+`missing_reference` is not a live claim outcome, so resending the identical
+image is not treated as a duplicate. Set the variable to 1 to send every
+missing-reference receipt straight to an admin, as before. A missing
+reference alongside any other problem always goes straight to an admin.
+
+Manual review stays mandatory for these: the reference is the replay guard,
+and without it the same screenshot could pay for several orders.
 
 If this becomes common for one bank, the options are to accept the manual
 workload, or to fall back to the image hash alone — which is weaker, because
@@ -827,7 +840,8 @@ Plus: confirm `/api/health` is green, and that cron-job.org shows recent runs.
 
 **Verification thresholds** — environment variables only
 (`PAYMENT_MAX_AGE_MINUTES`, `PAYMENT_CLOCK_SKEW_MINUTES`,
-`PAYMENT_WINDOW_MINUTES`, `MAX_INCOMPLETE_ATTEMPTS`). Change in Vercel,
+`PAYMENT_WINDOW_MINUTES`, `MAX_INCOMPLETE_ATTEMPTS`,
+`MAX_MISSING_REFERENCE_ATTEMPTS`). Change in Vercel,
 **redeploy**. No code change.
 
 **A new accepted payee name** — append to `PAYNOW_RECIPIENT_ALIASES`, redeploy.
@@ -1057,6 +1071,20 @@ An honest list.
 ---
 
 ## 10. Change log
+
+**2026-11-26 — No reference number: ask the customer before the admins**
+
+- A receipt whose only problem is a missing reference number is now sent
+  back to the customer to resend (like a repeat screenshot) instead of being
+  forwarded to the admins. The order returns to `awaiting_payment` with its
+  deadline restarted. A repeat without one goes to the admins as before. See
+  §3.9.
+- New outcome `missing_reference` (`OUTCOMES.MISSING_REFERENCE` in
+  `paymentRules.js`), new `repo.countMissingReferenceAttempts`, new env var
+  `MAX_MISSING_REFERENCE_ATTEMPTS` (default 2; 1 = old behaviour).
+- **Schema change:** `supabase/migrations/0008_missing_reference_outcome.sql`
+  adds the enum value. Apply it **before** deploying, or these receipts fail
+  to save and get escalated as `GEMINI_VERIFICATION_FAILURE`.
 
 **2026-11-26 — Stop Bot / Resume Bot emergency switch**
 

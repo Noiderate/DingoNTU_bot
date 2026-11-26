@@ -114,6 +114,15 @@ npm run webhook:info            # url set, pending 0, no last_error
       still verifies instead of expiring.
 - [ ] **Three unfinished attempts** → the third escalates to admin review
       (`MAX_INCOMPLETE_ATTEMPTS`).
+- [ ] **No reference visible** (crop the reference off an otherwise good
+      receipt) → the customer is asked to resend one showing the reference
+      number; **no** admin card. Order stays payable with a restarted
+      deadline; `payment_submissions.outcome` is `missing_reference`.
+- [ ] **Same screenshot again** after that → *not* a duplicate; it goes to
+      admin review flagged `MISSING_REFERENCE` (`MAX_MISSING_REFERENCE_ATTEMPTS`,
+      default 2). The first reply said so.
+- [ ] **No reference plus another problem** (e.g. also underpaid) → straight
+      to admin review, not handed back.
 - [ ] **Underpaid** → flagged; admins receive it with `AMOUNT_MISMATCH`.
 - [ ] **Overpaid** → still approves; `OVERPAID` recorded in the sheet.
 - [ ] **Wrong recipient** → flagged with `RECIPIENT_MISMATCH`.

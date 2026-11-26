@@ -114,6 +114,9 @@ const config = {
     windowMinutes: readInt('PAYMENT_WINDOW_MINUTES', 2),
     expiryEnabled: readBool('PAYMENT_EXPIRY_ENABLED', true),
     maxIncompleteAttempts: readInt('MAX_INCOMPLETE_ATTEMPTS', 3),
+    // Screenshots with no visible reference an order may send before the next
+    // one goes to an admin instead of back to the customer. 1 = always admin.
+    maxMissingReferenceAttempts: readInt('MAX_MISSING_REFERENCE_ATTEMPTS', 2),
   },
 
   service: {

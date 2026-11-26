@@ -19,6 +19,9 @@ const OUTCOMES = {
   FLAGGED: 'flagged',
   INCOMPLETE_TRANSFER: 'incomplete_transfer',
   DUPLICATE_REJECTED: 'duplicate_rejected',
+  // Everything checked out except that no reference number was visible: the
+  // customer is asked to resend one that shows it (see decideOutcome).
+  MISSING_REFERENCE: 'missing_reference',
 };
 
 const REASONS = {
@@ -226,6 +229,7 @@ function resolveTransactionTime(extraction) {
  * @param {Date}    receivedAt   when the customer sent the screenshot
  * @param {object}  duplicate    { reference: bool, image: bool } from the DB
  * @param {number}  incompleteAttempts  prior incomplete attempts on this order
+ * @param {number}  missingReferenceAttempts  prior "no reference shown" attempts on this order
  * @returns {{ outcome: string, reasons: string[], normalized: object }}
  */
 function evaluatePayment({
@@ -236,6 +240,7 @@ function evaluatePayment({
   receivedAt = new Date(),
   duplicate = { reference: false, image: false },
   incompleteAttempts = 0,
+  missingReferenceAttempts = 0,
 }) {
   const reasons = new Set();
 
@@ -313,7 +318,9 @@ function evaluatePayment({
   const referenceNormalized = normalizeReference(extraction.reference_id);
 
   if (!referenceNormalized) {
-    // Some banks genuinely do not print one. Those always reach a human.
+    // Usually the customer cropped it off or sent the wrong screen, so they are
+    // asked to resend first. Some banks genuinely do not print one, so a
+    // repeat reaches a human (see decideOutcome).
     reasons.add(REASONS.MISSING_REFERENCE);
   }
 
@@ -359,10 +366,19 @@ function evaluatePayment({
   };
 
   return {
-    outcome: decideOutcome(reasons, incompleteAttempts, rules),
+    outcome: decideOutcome(reasons, incompleteAttempts, rules, missingReferenceAttempts),
     reasons: [...reasons].sort(),
     normalized,
   };
+}
+
+// How many "no reference shown" screenshots an order gets before the next one
+// goes to an admin, when MAX_MISSING_REFERENCE_ATTEMPTS isn't set.
+const DEFAULT_MAX_MISSING_REFERENCE_ATTEMPTS = 2;
+
+function maxMissingReferenceAttempts(rules) {
+  const configured = rules && rules.maxMissingReferenceAttempts;
+  return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_MAX_MISSING_REFERENCE_ATTEMPTS;
 }
 
 /**
@@ -370,7 +386,7 @@ function evaluatePayment({
  * problem wins, so someone who sent a "Review transfer" screen is told exactly
  * that instead of a generic "under review".
  */
-function decideOutcome(reasons, incompleteAttempts, rules) {
+function decideOutcome(reasons, incompleteAttempts, rules, missingReferenceAttempts = 0) {
   if (reasons.has(REASONS.NOT_A_RECEIPT) || reasons.has(REASONS.UNREADABLE)) {
     return OUTCOMES.FLAGGED;
   }
@@ -400,11 +416,27 @@ function decideOutcome(reasons, incompleteAttempts, rules) {
     REASONS.CROPPED,
   ];
 
-  if (flagging.some(reason => reasons.has(reason))) {
-    return OUTCOMES.FLAGGED;
+  const flaggedBy = flagging.filter(reason => reasons.has(reason));
+
+  if (!flaggedBy.length) {
+    return OUTCOMES.AUTO_APPROVED;
   }
 
-  return OUTCOMES.AUTO_APPROVED;
+  // The reference is the only thing wrong (CROPPED here can only mean the crop
+  // is what hid it): the customer can fix that themselves, the same way a
+  // repeat screenshot is handed back to them. Anything else still needs a
+  // human. Repeats go to an admin, since some banks don't print a reference.
+  const onlyReferenceMissing = flaggedBy.every(
+    reason => reason === REASONS.MISSING_REFERENCE || reason === REASONS.CROPPED
+  );
+
+  if (onlyReferenceMissing) {
+    return missingReferenceAttempts + 1 >= maxMissingReferenceAttempts(rules)
+      ? OUTCOMES.FLAGGED
+      : OUTCOMES.MISSING_REFERENCE;
+  }
+
+  return OUTCOMES.FLAGGED;
 }
 
 module.exports = {
@@ -412,6 +444,7 @@ module.exports = {
   REASONS,
   evaluatePayment,
   decideOutcome,
+  maxMissingReferenceAttempts,
   normalizeReference,
   normalizeRecipientName,
   normalizeUen,

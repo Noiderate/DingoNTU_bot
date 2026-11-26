@@ -4,7 +4,9 @@ const orderStore = require('./orderStore');
 const orderActions = require('./orderActions');
 const { refreshDeliveryModeMenus } = require('../handlers/admin');
 const { extractReceipt, GeminiError } = require('./geminiClient');
-const { evaluatePayment, OUTCOMES, REASONS } = require('./paymentRules');
+const {
+  evaluatePayment, OUTCOMES, REASONS, maxMissingReferenceAttempts,
+} = require('./paymentRules');
 const { getAdminIds } = require('./googleSheets');
 const { isUniqueViolation } = require('./supabase');
 const { config } = require('../config');
@@ -34,7 +36,12 @@ const MESSAGES = {
   DUPLICATE: "This receipt has already been used for another order. Please send the screenshot for this order's payment.",
   INCOMPLETE: '⚠️ That looks like an unfinished or scheduled transfer, not a completed one.\n\n'
     + 'Please complete the payment and send the screenshot of the "Transfer Successful" screen.',
-  ALREADY_VERIFIED: '✅ This payment has already been verified. Nothing more is needed.',
+  MISSING_REFERENCE: "⚠️ We couldn't see a reference number on that screenshot.\n\n"
+    + 'Please send a screenshot of the completed transfer that shows the reference number '
+    + '(it may be called Transaction ID, Ref No. or similar).',
+  // Added when the next screenshot without one will go to an admin anyway.
+  MISSING_REFERENCE_LAST_TRY: "If your bank doesn't show a reference number, just send the screenshot again and an admin will check it.",
+  ALREADY_VERIFIED:'✅ This payment has already been verified. Nothing more is needed.',
   ALREADY_UNDER_REVIEW: 'This receipt is already under review, please hold ⏳',
   STILL_CHECKING: 'Your previous screenshot is still being checked, please wait.',
 };
@@ -341,7 +348,27 @@ async function claimAndRecord(submission, decision, patch) {
   }
 }
 
-async function applyOutcome(bot, { order, submission, decision, patch }) {
+/**
+ * Put the order back to awaiting payment so the customer can resend, with the
+ * payment deadline restarted (one more PAYMENT_WINDOW_MINUTES from now) - with
+ * the original deadline left alone, resending routinely landed after it and
+ * expired an order that was being paid. Null if the order already moved on.
+ */
+async function returnToCustomer(order, reason) {
+  return repo.transitionOrderStatus(
+    order.id, STATUS.VERIFYING_PAYMENT, STATUS.AWAITING_PAYMENT,
+    'ai_verifier', reason,
+    { patch: { payment_due_at: new Date(Date.now() + config.payment.windowMinutes * 60 * 1000).toISOString() } }
+  );
+}
+
+function deadlineNote() {
+  return config.payment.expiryEnabled
+    ? `\n\n⏳ You have ${config.payment.windowMinutes} more minute(s) to send it.`
+    : '';
+}
+
+async function applyOutcome(bot, { order, submission, decision, patch, missingReferenceAttempts = 0 }) {
   const claim = await claimAndRecord(submission, decision, patch);
   const effectiveOutcome = claim.claimed ? decision.outcome : OUTCOMES.DUPLICATE_REJECTED;
   const chatId = order.chatId;
@@ -380,25 +407,31 @@ async function applyOutcome(bot, { order, submission, decision, patch }) {
   }
 
   if (effectiveOutcome === OUTCOMES.INCOMPLETE_TRANSFER) {
-    // Stays payable: the customer can finish the transfer and resend. The
-    // payment deadline restarts (one more PAYMENT_WINDOW_MINUTES from now) -
-    // with the original deadline left alone, finishing the transfer and
-    // resending routinely landed after it and expired an order that was
-    // being paid.
-    const reverted = await repo.transitionOrderStatus(
-      order.id, STATUS.VERIFYING_PAYMENT, STATUS.AWAITING_PAYMENT,
-      'ai_verifier', 'Unfinished transfer screenshot',
-      { patch: { payment_due_at: new Date(Date.now() + config.payment.windowMinutes * 60 * 1000).toISOString() } }
-    );
+    // Stays payable: the customer can finish the transfer and resend.
+    const reverted = await returnToCustomer(order, 'Unfinished transfer screenshot');
 
     // Someone/something else already moved the order on - telling the
     // customer to finish an unfinished transfer now would contradict
     // whatever verdict they already received.
     if (reverted) {
-      const deadlineNote = config.payment.expiryEnabled
-        ? `\n\n⏳ You have ${config.payment.windowMinutes} more minute(s) to send it.`
+      await deliverOutcomeMessage(bot, chatId, processingMessageId, MESSAGES.INCOMPLETE + deadlineNote());
+    }
+
+    return { outcome: effectiveOutcome };
+  }
+
+  if (effectiveOutcome === OUTCOMES.MISSING_REFERENCE) {
+    // Handed back like a repeat screenshot, not sent to an admin: the customer
+    // has most likely cropped the reference off. They have usually already
+    // paid, hence the restarted deadline.
+    const reverted = await returnToCustomer(order, 'No reference number on screenshot');
+
+    if (reverted) {
+      // This was the last one sent back - say so, for banks that never show one.
+      const lastTry = missingReferenceAttempts + 2 >= maxMissingReferenceAttempts(config.payment)
+        ? `\n\n${MESSAGES.MISSING_REFERENCE_LAST_TRY}`
         : '';
-      await deliverOutcomeMessage(bot, chatId, processingMessageId, MESSAGES.INCOMPLETE + deadlineNote);
+      await deliverOutcomeMessage(bot, chatId, processingMessageId, MESSAGES.MISSING_REFERENCE + lastTry + deadlineNote());
     }
 
     return { outcome: effectiveOutcome };
@@ -665,7 +698,10 @@ async function processSubmission(bot, submissionId, {
     }
 
     // --- Decide ---
-    const incompleteAttempts = await repo.countIncompleteAttempts(order.id);
+    const [incompleteAttempts, missingReferenceAttempts] = await Promise.all([
+      repo.countIncompleteAttempts(order.id),
+      repo.countMissingReferenceAttempts(order.id),
+    ]);
 
     const decision = evaluatePayment({
       extraction: extractionResult.extraction,
@@ -675,6 +711,7 @@ async function processSubmission(bot, submissionId, {
       receivedAt: new Date(submission.received_at),
       duplicate: { reference: false, image: false },
       incompleteAttempts,
+      missingReferenceAttempts,
     });
 
     const patch = {
@@ -693,7 +730,7 @@ async function processSubmission(bot, submissionId, {
       image_sha256: submission.image_sha256,
     };
 
-    return await applyOutcome(bot, { order, submission, decision, patch });
+    return await applyOutcome(bot, { order, submission, decision, patch, missingReferenceAttempts });
   } catch (error) {
     return handleTerminalFailure(bot, { order, submission, error });
   }

@@ -804,6 +804,20 @@ async function countIncompleteAttempts(orderId) {
   return result.count || 0;
 }
 
+/** Screenshots on this order already sent back for showing no reference number. */
+async function countMissingReferenceAttempts(orderId) {
+  const supabase = getSupabase();
+
+  const result = await supabase
+    .from('payment_submissions')
+    .select('id', { count: 'exact', head: true })
+    .eq('order_id', orderId)
+    .eq('outcome', 'missing_reference');
+
+  unwrap(result, 'countMissingReferenceAttempts');
+  return result.count || 0;
+}
+
 /**
  * Find the live submission already holding a reference or image hash.
  *
@@ -978,6 +992,7 @@ module.exports = {
   claimSubmissionById,
   releaseSubmission,
   countIncompleteAttempts,
+  countMissingReferenceAttempts,
   findConflictingSubmission,
 
   buildReceiptPath,
