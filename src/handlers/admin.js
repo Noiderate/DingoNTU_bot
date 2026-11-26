@@ -683,6 +683,41 @@ async function repostPreorderAvailability(bot) {
   await replacePreorderPost(bot, post, content);
 }
 
+/** A round is live from the preorder post until Finish Delivery removes it. */
+async function isRoundLive() {
+  const post = await getPreorderPost();
+  return Boolean(post && post.msgId);
+}
+
+/**
+ * Save a stock number an admin typed in Manage Food Items.
+ *
+ * During a round it is tonight's TOTAL: it becomes the starting stock and the
+ * items already sold stay sold (menuStore.setTonightTotalStock). Outside a
+ * round it's simply the starting stock for next time, as before. Resolves to
+ * the store's result plus newStock, the stock left after saving.
+ */
+async function saveTypedStock(itemId, typed) {
+  if (await isRoundLive()) {
+    const result = await menuStore.setTonightTotalStock(itemId, typed);
+    return { ...result, newStock: result.remaining };
+  }
+  const result = await menuStore.updateFoodItemStock(itemId, typed);
+  return { ...result, newStock: typed };
+}
+
+/** The "type a stock number" prompt for one item, with tonight's figures during a round. */
+async function stockPromptText(item, index = null, count = null) {
+  const tonight = await isRoundLive()
+    ? {
+      total: item.baselineStock === null || item.baselineStock === undefined ? (item.stock || 0) : item.baselineStock,
+      sold: menuStore.soldSinceBaseline(item),
+      remaining: item.stock || 0,
+    }
+    : null;
+  return menuTexts.editStockPromptText(item.name, item.stock || 0, index, count, tonight);
+}
+
 /**
  * The single place every stock-changing call site refreshes the preorder
  * post from, in place of a plain refreshPreorderPost(bot) call. Routes to
@@ -1288,7 +1323,7 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
 
     const beforeItem = (await menuStore.getFoodItems()).find(item => item.id === state.foodItemId);
 
-    const result = await menuStore.updateFoodItemStock(state.foodItemId, newStock);
+    const result = await saveTypedStock(state.foodItemId, newStock);
     const confirmation = await bot.sendMessage(chatId, result.message);
     await clearAdminState(userId);
 
@@ -1315,7 +1350,9 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
 
     await refreshPreorderPostAfterStockChange(
       bot,
-      beforeItem ? [{ name: beforeItem.name, oldStock: beforeItem.stock || 0, newStock }] : []
+      beforeItem && result.success
+        ? [{ name: beforeItem.name, oldStock: beforeItem.stock || 0, newStock: result.newStock }]
+        : []
     );
     await refreshDeliveryModeMenus(bot);
     return true;
@@ -1330,7 +1367,7 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
     }
 
     const currentItem = state.items[state.currentIndex];
-    const saved = await menuStore.updateFoodItemStock(currentItem.id, newStock);
+    const saved = await saveTypedStock(currentItem.id, newStock);
 
     // Stay on this item so the admin can retry, rather than silently moving on.
     if (!saved.success) {
@@ -1351,9 +1388,11 @@ async function handleAdminStateInput(bot, chatId, userId, text, state, messageId
     if (nextIndex < state.items.length) {
       const nextItem = state.items[nextIndex];
       await setAdminState(userId, { ...state, currentIndex: nextIndex });
+      // Fresh figures: orders may have come in since the loop started.
+      const freshNext = (await menuStore.getFoodItems()).find(item => item.id === nextItem.id) || nextItem;
       await updateMenuMessage(
         bot, chatId, userId,
-        menuTexts.editStockPromptText(nextItem.name, nextItem.stock || 0, nextIndex + 1, state.items.length),
+        await stockPromptText(freshNext, nextIndex + 1, state.items.length),
         keyboards.cancelStockEditKeyboard()
       );
       return true;
@@ -2214,9 +2253,12 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     const foodItemId = Number.parseInt(extractCallbackValue(data, CALLBACKS.FOOD_EDIT_STOCK_PREFIX), 10);
     await setAdminState(userId, { mode: STATES.EDIT_FOOD_STOCK_SPECIFIC, foodItemId });
 
+    const item = (await menuStore.getFoodItems()).find(food => food.id === foodItemId);
     await updateMenuMessage(
       bot, chatId, userId,
-      '📊 Enter new stock level for this food item:\n\nReply with a number (e.g., 10)',
+      item
+        ? `${await stockPromptText(item)}\n\nReply with a number (e.g., 10)`
+        : '📊 Enter new stock level for this food item:\n\nReply with a number (e.g., 10)',
       keyboards.cancelStockEditKeyboard()
     );
     await answer();
@@ -2237,7 +2279,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
 
     await updateMenuMessage(
       bot, chatId, userId,
-      menuTexts.editStockPromptText(first.name, first.stock || 0, 1, foodItems.length),
+      await stockPromptText(first, 1, foodItems.length),
       keyboards.cancelStockEditKeyboard()
     );
     await answer();

@@ -139,8 +139,17 @@ function editPricePromptText(itemName, currentPrice) {
 /**
  * Edit specific stock prompt text
  */
-function editStockPromptText(itemName, currentStock, currentIndex, totalItems) {
-  return `📊 Enter stock for: ${itemName}\n(Current stock: ${currentStock || 0})\n\n${currentIndex} of ${totalItems}`;
+function editStockPromptText(itemName, currentStock, currentIndex, totalItems, tonight = null) {
+  const position = currentIndex ? `\n\n${currentIndex} of ${totalItems}` : '';
+
+  // While a round is live the number typed is tonight's TOTAL, and what has
+  // already sold is kept - so show all three figures.
+  if (tonight) {
+    return `📊 ${itemName}\nTonight: ${tonight.total} total · ${tonight.sold} sold · ${tonight.remaining} left\n\n`
+      + `Type the new TOTAL for tonight. The ${tonight.sold} already sold stay sold.${position}`;
+  }
+
+  return `📊 Enter stock for: ${itemName}\n(Current stock: ${currentStock || 0})${position}`;
 }
 
 /**

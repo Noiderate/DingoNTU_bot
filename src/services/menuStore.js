@@ -209,6 +209,76 @@ async function updateFoodItemStock(id, newStock) {
 }
 
 /**
+ * What has sold since the item's starting stock was set: starting − left.
+ * An item with no starting stock recorded can't tell, so counts as none sold.
+ */
+function soldSinceBaseline(item) {
+  if (item.baselineStock === null || item.baselineStock === undefined) {
+    return 0;
+  }
+  return Math.max(0, item.baselineStock - (Number(item.stock) || 0));
+}
+
+/**
+ * An admin changing an item's stock while a round is live. The number typed is
+ * the TOTAL for tonight: it becomes the starting stock, and what has already
+ * sold stays sold, so the stock left is total − sold. (updateFoodItemStock
+ * instead set both to the typed number, which wiped the sold count.)
+ *
+ * Guarded against an order landing between the read and the write: the update
+ * only applies if stock and starting stock are still what was read, and is
+ * retried otherwise.
+ *
+ * Never throws; returns { success, message, total, sold, remaining }.
+ */
+async function setTonightTotalStock(id, total) {
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const found = unwrap(
+        await getSupabase().from('menu_items').select('*').eq('id', id),
+        'menuStore.setTonightTotalStock.read'
+      );
+
+      if (!found.length) {
+        return { success: false, message: '✗ That food item no longer exists.' };
+      }
+
+      const item = toItem(found[0]);
+      const sold = soldSinceBaseline(item);
+      const remaining = Math.max(0, total - sold);
+
+      let update = getSupabase()
+        .from('menu_items')
+        .update({ stock: remaining, baseline_stock: total })
+        .eq('id', id)
+        .eq('stock', item.stock);
+      update = item.baselineStock === null
+        ? update.is('baseline_stock', null)
+        : update.eq('baseline_stock', item.baselineStock);
+
+      const saved = unwrap(await update.select('name'), 'menuStore.setTonightTotalStock.write');
+
+      if (saved.length) {
+        const oversold = sold > total ? `\n⚠️ ${sold} already sold - more than ${total}.` : '';
+        return {
+          success: true,
+          total,
+          sold,
+          remaining,
+          message: `✓ ${saved[0].name}: ${total} total tonight (${sold} sold, ${remaining} left).${oversold}`,
+        };
+      }
+      // Stock moved underneath us (an order or a restock): read again.
+    }
+
+    return { success: false, message: '✗ Stock was changing while saving (orders coming in). Please try again.' };
+  } catch (error) {
+    console.error('Error setting tonight\'s stock:', error.message);
+    return { success: false, message: `✗ Failed to update stock: ${error.message}` };
+  }
+}
+
+/**
  * Set an item's remaining stock for tonight only. Unlike updateFoodItemStock
  * this leaves the reset baseline alone, so a stage-2 adjustment doesn't carry
  * over to the next round.
@@ -327,6 +397,8 @@ module.exports = {
   deleteFoodItem,
   updateFoodItemPrice,
   updateFoodItemStock,
+  setTonightTotalStock,
+  soldSinceBaseline,
   setRemainingStock,
   deductStock,
   restoreStock,

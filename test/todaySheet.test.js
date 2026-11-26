@@ -2,7 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { DateTime } = require('luxon');
 
-const { HEADERS, buildOrderRow, buildItemTotals, getServiceDayWindow } = require('../src/services/todaySheet');
+const {
+  HEADERS, buildOrderRow, buildItemTotals, buildLeftToServeTotals, buildStockRows, getServiceDayWindow,
+} = require('../src/services/todaySheet');
 const { STATUS } = require('../src/services/orderRepository');
 const { STATUS_LABELS, PAYMENT_STATUS } = require('../src/services/sheetMirror');
 const { SGT } = require('../src/utils/time');
@@ -107,6 +109,44 @@ test('ties in quantity break alphabetically', () => {
   assert.deepEqual(buildItemTotals(orders), [
     ['Apple Pie', 2],
     ['Zebra Cake', 2],
+  ]);
+});
+
+test('left to serve counts only orders not yet handed over', () => {
+  const orders = [
+    makeOrder({ status: STATUS.PAID, order_items: [{ item_name_snapshot: 'Chicken Rice', quantity: 2 }] }),
+    makeOrder({ status: STATUS.AWAITING_PAYMENT, order_items: [{ item_name_snapshot: 'Chicken Rice', quantity: 1 }] }),
+    makeOrder({ status: STATUS.PAYMENT_FLAGGED, order_items: [{ item_name_snapshot: 'Iced Milo', quantity: 1 }] }),
+    makeOrder({ status: STATUS.SERVED, order_items: [{ item_name_snapshot: 'Chicken Rice', quantity: 4 }] }),
+    makeOrder({ status: STATUS.EXPIRED, order_items: [{ item_name_snapshot: 'Chicken Rice', quantity: 9 }] }),
+  ];
+
+  assert.deepEqual(buildLeftToServeTotals(orders), [['Chicken Rice', 3], ['Iced Milo', 1]]);
+  // The day's total still includes what was already served.
+  assert.deepEqual(buildItemTotals(orders), [['Chicken Rice', 7], ['Iced Milo', 1]]);
+});
+
+test('stock rows: sold from orders, starting = remaining + sold, matched by item id', () => {
+  const menu = [
+    { id: 1, name: 'Chicken Rice', stock: 31 },
+    { id: 2, name: 'Iced Milo (L)', stock: 5 }, // renamed since it was ordered
+    { id: 3, name: 'Fries', stock: 20 },
+  ];
+  const orders = [
+    makeOrder({ status: STATUS.PAID, order_items: [{ food_sheet_row_id: 1, item_name_snapshot: 'Chicken Rice', quantity: 4 }] }),
+    makeOrder({ status: STATUS.SERVED, order_items: [
+      { food_sheet_row_id: 1, item_name_snapshot: 'Chicken Rice', quantity: 6 },
+      { food_sheet_row_id: 2, item_name_snapshot: 'Iced Milo', quantity: 2 },
+    ] }),
+    makeOrder({ status: STATUS.EXPIRED, order_items: [{ food_sheet_row_id: 1, item_name_snapshot: 'Chicken Rice', quantity: 50 }] }),
+    makeOrder({ status: STATUS.PAID, order_items: [{ food_sheet_row_id: 9, item_name_snapshot: 'Old Special', quantity: 1 }] }),
+  ];
+
+  assert.deepEqual(buildStockRows(menu, orders), [
+    ['Chicken Rice', 41, 31, 10],
+    ['Iced Milo (L)', 7, 5, 2],
+    ['Fries', 20, 20, 0],
+    ['Old Special (removed from menu)', 1, 0, 1],
   ]);
 });
 

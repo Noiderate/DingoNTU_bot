@@ -4,6 +4,8 @@ const googleSheets = require('./googleSheets');
 const { getSupabase, unwrap } = require('./supabase');
 const stateStore = require('./stateStore');
 const { STATUS_LABELS, paymentStatusFor } = require('./sheetMirror');
+const { ACTIVE_STATUSES } = require('./orderRepository');
+const menuStore = require('./menuStore');
 const { SGT } = require('../utils/time');
 const { log } = require('../utils/logger');
 const { config } = require('../config');
@@ -106,11 +108,15 @@ function buildOrderRow(order) {
   ];
 }
 
-function buildItemTotals(orders) {
+// Still to be handed over: the same set delivery mode treats as active
+// (awaiting payment, checking, under review, paid). Served orders are done.
+const LEFT_TO_SERVE = new Set(ACTIVE_STATUSES);
+
+function buildItemTotals(orders, include = order => !EXCLUDED_FROM_TOTALS.has(order.status)) {
   const totals = new Map();
 
   for (const order of orders) {
-    if (EXCLUDED_FROM_TOTALS.has(order.status)) {
+    if (!include(order)) {
       continue;
     }
 
@@ -123,8 +129,59 @@ function buildItemTotals(orders) {
   return [...totals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
+/** Item quantities from orders not yet served (see LEFT_TO_SERVE). */
+function buildLeftToServeTotals(orders) {
+  return buildItemTotals(orders, order => LEFT_TO_SERVE.has(order.status));
+}
+
+/**
+ * Starting stock / remaining / sold per menu item.
+ *
+ * Sold is counted from tonight's orders - the same orders "Total Ordered
+ * Today" counts - so this table always tallies with the order list above it.
+ * Remaining is the live stock, and starting is the two added together: what
+ * there was before tonight's orders took their share, including any stock an
+ * admin added or removed during the night.
+ *
+ * Matched on the menu item id each order line recorded, so a renamed item
+ * still lines up. Something sold tonight that has since been deleted from the
+ * menu is listed at the end with nothing left.
+ */
+function buildStockRows(menuItems, orders) {
+  const soldById = new Map();
+  const soldNames = new Map();
+
+  for (const order of orders) {
+    if (EXCLUDED_FROM_TOTALS.has(order.status)) {
+      continue;
+    }
+    for (const line of order.order_items || []) {
+      const id = Number(line.food_sheet_row_id);
+      soldById.set(id, (soldById.get(id) || 0) + line.quantity);
+      if (!soldNames.has(id)) {
+        soldNames.set(id, line.item_name_snapshot);
+      }
+    }
+  }
+
+  const rows = menuItems.map(item => {
+    const sold = soldById.get(Number(item.id)) || 0;
+    const remaining = Number(item.stock) || 0;
+    return [item.name, remaining + sold, remaining, sold];
+  });
+
+  const onMenu = new Set(menuItems.map(item => Number(item.id)));
+  for (const [id, sold] of soldById) {
+    if (!onMenu.has(id)) {
+      rows.push([`${soldNames.get(id)} (removed from menu)`, sold, 0, sold]);
+    }
+  }
+
+  return rows;
+}
+
 /** Bold the header rows and reset stray formatting left by a bigger day. */
-async function applyFormatting(sheetId, { totalsHeaderRowIndex, totalsColumnHeaderRowIndex }) {
+async function applyFormatting(sheetId, boldRowIndexes) {
   const boldRange = (startRowIndex, endRowIndex) => ({
     repeatCell: {
       range: { sheetId, startRowIndex, endRowIndex, startColumnIndex: 0, endColumnIndex: COLUMN_COUNT },
@@ -150,8 +207,8 @@ async function applyFormatting(sheetId, { totalsHeaderRowIndex, totalsColumnHead
       },
     },
     boldRange(0, 1), // column headers
-    boldRange(totalsHeaderRowIndex, totalsHeaderRowIndex + 1), // "Total Ordered Today"
-    boldRange(totalsColumnHeaderRowIndex, totalsColumnHeaderRowIndex + 1), // "Item" / "Qty"
+    // Section titles and their "Item" / "Qty" rows.
+    ...boldRowIndexes.map(index => boldRange(index, index + 1)),
   ];
 
   await googleSheets.batchUpdateSpreadsheet(requests);
@@ -189,15 +246,46 @@ async function refreshTodaySheet() {
 
   const orders = await getTodaysOrders();
   const totals = buildItemTotals(orders);
+  const leftToServe = buildLeftToServeTotals(orders);
 
   const rows = [HEADERS, ...orders.map(buildOrderRow)];
+  const boldRowIndexes = [];
+
+  const pushSection = (title, entries, emptyText) => {
+    rows.push([]);
+    boldRowIndexes.push(rows.length);
+    rows.push([title]);
+    boldRowIndexes.push(rows.length);
+    rows.push(['Item', 'Qty']);
+    if (entries.length) {
+      entries.forEach(([name, qty]) => rows.push([name, qty]));
+    } else {
+      rows.push([emptyText]);
+    }
+  };
+
+  pushSection('Total Ordered Today', totals, 'No orders yet');
+  pushSection('Left To Serve', leftToServe, 'Nothing left to serve');
+
+  // The stock table is extra: if the menu can't be read, the order tables
+  // above are still written rather than the whole refresh failing.
+  let menuItems = null;
+  try {
+    menuItems = await menuStore.getFoodItemsOrThrow();
+  } catch (error) {
+    log('warn', 'today_sheet_menu_read_failed', { error: error.message });
+  }
 
   rows.push([]);
-  const totalsHeaderRowIndex = rows.length;
-  rows.push(['Total Ordered Today']);
-  const totalsColumnHeaderRowIndex = rows.length;
-  rows.push(['Item', 'Qty']);
-  totals.forEach(([name, qty]) => rows.push([name, qty]));
+  boldRowIndexes.push(rows.length);
+  rows.push(['Stock']);
+  boldRowIndexes.push(rows.length);
+  rows.push(['Item', 'Starting Stock', 'Remaining', 'Sold']);
+  if (menuItems) {
+    buildStockRows(menuItems, orders).forEach(row => rows.push(row));
+  } else {
+    rows.push(['Could not read the menu - retrying next minute']);
+  }
 
   // The tick calls this every minute, and most minutes nothing has changed. The
   // service-day rollover needs no special case: the order list changes then, so
@@ -226,7 +314,7 @@ async function refreshTodaySheet() {
   }
 
   try {
-    await applyFormatting(cachedSheetId, { totalsHeaderRowIndex, totalsColumnHeaderRowIndex });
+    await applyFormatting(cachedSheetId, boldRowIndexes);
   } catch (error) {
     // Cosmetic only - the data write above already succeeded.
     log('warn', 'today_sheet_formatting_failed', { error: error.message });
@@ -242,6 +330,8 @@ module.exports = {
   HEADERS,
   buildOrderRow,
   buildItemTotals,
+  buildLeftToServeTotals,
+  buildStockRows,
   getServiceDayWindow,
   refreshTodaySheet,
 };

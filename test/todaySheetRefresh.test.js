@@ -21,6 +21,7 @@ supabaseModule.getSupabase = fakeClient;
 
 const googleSheets = require('../src/services/googleSheets');
 const stateStore = require('../src/services/stateStore');
+const menuStore = require('../src/services/menuStore');
 const { refreshTodaySheet } = require('../src/services/todaySheet');
 
 /**
@@ -41,8 +42,10 @@ function makeOrder(code, overrides = {}) {
   };
 }
 
-function setup(t, { saved = null, lock = 'holder-1', clearOk = true, writeOk = true } = {}) {
+function setup(t, { saved = null, lock = 'holder-1', clearOk = true, writeOk = true, menu = [] } = {}) {
   const calls = { clears: 0, writes: 0, formats: 0 };
+  // Not part of the call counts the tests compare.
+  Object.defineProperty(calls, 'lastRows', { writable: true, enumerable: false, value: null });
   const state = { value: saved };
 
   t.mock.method(stateStore, 'acquireLock', async () => lock);
@@ -54,9 +57,14 @@ function setup(t, { saved = null, lock = 'holder-1', clearOk = true, writeOk = t
       state.value = value;
     }
   });
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => menu);
   t.mock.method(googleSheets, 'ensureSheetTab', async () => 7);
   t.mock.method(googleSheets, 'clearRange', async () => { calls.clears += 1; return clearOk; });
-  t.mock.method(googleSheets, 'writeToSheet', async () => { calls.writes += 1; return writeOk; });
+  t.mock.method(googleSheets, 'writeToSheet', async (range, rows) => {
+    calls.writes += 1;
+    calls.lastRows = rows;
+    return writeOk;
+  });
   t.mock.method(googleSheets, 'batchUpdateSpreadsheet', async () => { calls.formats += 1; });
 
   return { calls, state };
@@ -146,6 +154,34 @@ test('a failed clear is not recorded as done either', async t => {
   assert.deepEqual(result, { written: false });
   assert.equal(calls.writes, 1);
   assert.equal(state.value, null);
+});
+
+test('the tab ends with Left To Serve and a Stock table that tallies with the orders', async t => {
+  currentOrders = [
+    makeOrder('A1', { status: 'paid', order_items: [{ food_sheet_row_id: 1, item_name_snapshot: 'Chicken Rice', quantity: 2 }] }),
+    makeOrder('A2', { status: 'served', order_items: [{ food_sheet_row_id: 1, item_name_snapshot: 'Chicken Rice', quantity: 3 }] }),
+    makeOrder('A3', { status: 'expired', order_items: [{ food_sheet_row_id: 1, item_name_snapshot: 'Chicken Rice', quantity: 9 }] }),
+  ];
+  const { calls } = setup(t, { menu: [{ id: 1, name: 'Chicken Rice', stock: 36, baselineStock: 41 }] });
+
+  await refreshTodaySheet();
+  const rows = calls.lastRows;
+  const at = title => rows.findIndex(row => row[0] === title);
+
+  assert.deepEqual(rows[at('Left To Serve') + 2], ['Chicken Rice', 2]);
+  assert.deepEqual(rows[at('Stock') + 1], ['Item', 'Starting Stock', 'Remaining', 'Sold']);
+  assert.deepEqual(rows[at('Stock') + 2], ['Chicken Rice', 41, 36, 5]);
+});
+
+test('a menu read failure still writes the order tables', async t => {
+  currentOrders = [makeOrder('A1')];
+  const { calls } = setup(t);
+  t.mock.method(menuStore, 'getFoodItemsOrThrow', async () => { throw new Error('db down'); });
+
+  const result = await refreshTodaySheet();
+
+  assert.deepEqual(result, { orders: 1, items: 1 });
+  assert.ok(calls.lastRows.some(row => /Could not read the menu/.test(row[0] || '')));
 });
 
 test('inside the lease window the refresh is throttled before anything is read or written', async t => {

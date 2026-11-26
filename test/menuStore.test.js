@@ -19,7 +19,7 @@ function fakeClient({ tables = {}, rpc = {} } = {}) {
 
   function chain(table, result) {
     const c = { table };
-    for (const method of ['select', 'order', 'insert', 'update', 'delete', 'eq']) {
+    for (const method of ['select', 'order', 'insert', 'update', 'delete', 'eq', 'is']) {
       c[method] = (...args) => {
         calls.push({ table, method, args });
         return c;
@@ -32,7 +32,9 @@ function fakeClient({ tables = {}, rpc = {} } = {}) {
   return {
     calls,
     from(table) {
-      return chain(table, tables[table] || { data: [], error: null });
+      // A function gives a different answer per query (read, then write).
+      const result = typeof tables[table] === 'function' ? tables[table]() : tables[table];
+      return chain(table, result || { data: [], error: null });
     },
     rpc(name, args) {
       calls.push({ table: null, method: 'rpc', args: [name, args] });
@@ -158,6 +160,64 @@ test('a stock edit for a deleted item fails cleanly', async t => {
   const result = await menuStore.updateFoodItemStock(3, 25);
 
   assert.equal(result.success, false);
+});
+
+// --- Mid-round stock edit: the number typed is tonight's total ---------------
+
+const RICE = { id: 3, name: 'Chicken Rice', price_cents: 250, stock: 41, baseline_stock: 51 };
+
+test('a mid-round edit keeps what already sold: 51 started, 10 sold, typed 41 → 31 left', async t => {
+  const client = useClient(t, fakeClient({ tables: { menu_items: ok([RICE]) } }));
+
+  const result = await menuStore.setTonightTotalStock(3, 41);
+
+  assert.equal(result.success, true);
+  assert.deepEqual({ total: result.total, sold: result.sold, remaining: result.remaining }, { total: 41, sold: 10, remaining: 31 });
+  assert.match(result.message, /41 total tonight \(10 sold, 31 left\)/);
+  const update = client.calls.find(call => call.method === 'update');
+  assert.deepEqual(update.args[0], { stock: 31, baseline_stock: 41 });
+  // Only applies if nothing changed since the read.
+  const eqs = client.calls.filter(call => call.method === 'eq').map(call => call.args);
+  assert.deepEqual(eqs.slice(-3), [['id', 3], ['stock', 41], ['baseline_stock', 51]]);
+});
+
+test('a total below what already sold leaves nothing, and says so', async t => {
+  useClient(t, fakeClient({ tables: { menu_items: ok([RICE]) } }));
+
+  const result = await menuStore.setTonightTotalStock(3, 8);
+
+  assert.equal(result.remaining, 0);
+  assert.match(result.message, /10 already sold - more than 8/);
+});
+
+test('an item with no starting stock recorded counts as nothing sold', async t => {
+  const client = useClient(t, fakeClient({ tables: { menu_items: ok([{ ...RICE, baseline_stock: null }]) } }));
+
+  const result = await menuStore.setTonightTotalStock(3, 30);
+
+  assert.deepEqual({ sold: result.sold, remaining: result.remaining }, { sold: 0, remaining: 30 });
+  assert.deepEqual(client.calls.find(call => call.method === 'is').args, ['baseline_stock', null]);
+});
+
+test('if an order lands between the read and the write, it reads again', async t => {
+  let query = 0;
+  const answers = [
+    ok([RICE]), // read: 41 left
+    ok([]), // write lost the race - stock changed
+    ok([{ ...RICE, stock: 40 }]), // read again: an order took one
+    ok([{ name: 'Chicken Rice' }]), // write succeeds
+  ];
+  useClient(t, fakeClient({ tables: { menu_items: () => answers[query++] } }));
+
+  const result = await menuStore.setTonightTotalStock(3, 41);
+
+  assert.equal(result.success, true);
+  assert.deepEqual({ sold: result.sold, remaining: result.remaining }, { sold: 11, remaining: 30 });
+});
+
+test('a mid-round edit for a deleted item fails cleanly', async t => {
+  useClient(t, fakeClient({ tables: { menu_items: ok([]) } }));
+  assert.equal((await menuStore.setTonightTotalStock(3, 41)).success, false);
 });
 
 // --- Checkout deduction ------------------------------------------------------

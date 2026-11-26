@@ -1078,6 +1078,21 @@ An honest list.
 
 ## 10. Change log
 
+**2026-11-26 — Today's Orders: Left To Serve + Stock tables; mid-round stock edits keep "sold"**
+
+- Today's Orders tab now ends with two more tables: **Left To Serve** (items
+  from orders not yet handed over: awaiting payment, checking, under review,
+  paid) and **Stock** (Item · Starting Stock · Remaining · Sold). Sold is
+  counted from tonight's orders, the same ones "Total Ordered Today" counts,
+  and Starting = Remaining + Sold, so it always tallies with the order list.
+- Manage Food Items → stock edits **while a round is live** (preorder post up,
+  until Finish Delivery) now treat the typed number as **tonight's total**:
+  it becomes the starting stock, what already sold stays sold, and stock left
+  = total − sold (`menuStore.setTonightTotalStock`). Previously the edit set
+  starting stock and stock left to the same number, which reset 🧾 Sold Today
+  to 0. The prompt now shows "total · sold · left". Outside a round an edit
+  sets the starting stock for next time, as before.
+
 **2026-11-26 — Date-only receipts (OCBC) accepted when they show the order code**
 
 - OCBC prints only a date ("When: 26 Nov 2026"), so every OCBC receipt was
