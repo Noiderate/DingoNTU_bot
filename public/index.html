@@ -366,11 +366,10 @@
   .field label { display: block; font-size: 14px; font-weight: 700; margin-bottom: 6px; }
   .req { color: var(--red); }
 
-  .lookup { display: flex; gap: 8px; }
-  .lookup input { flex: 1; min-width: 0; }
-  .lookup .btn { flex: 0 0 auto; }
-  .lookup .btn[disabled] { opacity: .6; cursor: progress; }
-  .field-error { margin: 6px 0 0; font-size: 13.5px; font-weight: 700; color: var(--red); }
+  .field-error { margin: 8px 0 0; font-size: 13.5px; font-weight: 700; color: var(--red); }
+  input.invalid { border-color: var(--red) !important; box-shadow: 0 0 0 2px var(--red); }
+  .halls.invalid .hall span { border-color: var(--red); }
+  .place .btn[disabled] { opacity: .7; cursor: progress; }
 
   .found {
     display: flex; gap: 12px; align-items: flex-start;
@@ -532,18 +531,16 @@
             <legend>Pickup point <span class="req">*</span></legend>
             <p class="hint">Live location is posted in our Telegram channel <a href="https://t.me/dingontu">@dingontu</a>.</p>
             <div class="halls" id="halls"></div>
+            <p class="field-error" id="hall-error" role="alert" hidden></p>
           </fieldset>
 
           <fieldset>
             <legend>Your details</legend>
-            <p class="hint">Ordered before? Just enter your phone number or Telegram handle and we'll fill in the rest.</p>
+            <p class="hint">Ordered before? Your phone number or Telegram handle is all we need.</p>
 
             <div class="field">
               <label for="who">Phone number or Telegram handle <span class="req">*</span></label>
-              <div class="lookup">
-                <input id="who" name="who" placeholder="91234567 or @yourhandle" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="who-error">
-                <button type="button" class="btn btn--small btn--ghost" id="who-go">Continue</button>
-              </div>
+              <input id="who" name="who" placeholder="91234567 or @yourhandle" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="who-error">
               <p class="field-error" id="who-error" role="alert" hidden></p>
             </div>
 
@@ -578,6 +575,7 @@
                   <input id="phone" name="phone" type="tel" inputmode="tel" placeholder="9123 4567" autocomplete="tel">
                 </div>
               </div>
+              <p class="field-error" id="details-error" role="alert" hidden></p>
             </div>
 
             <div class="field notes-field">
@@ -597,6 +595,7 @@
             <input type="checkbox" id="agree" required>
             <span>I've read the collection and refund policy above.</span>
           </label>
+          <p class="field-error" id="agree-error" role="alert" hidden></p>
 
           <div class="place">
             <div class="place__total">Order total<strong id="place-total">$0.00</strong></div>
@@ -616,8 +615,16 @@
 <footer class="site-footer">
   <span class="blob blob--red-br" aria-hidden="true"></span>
   <div class="wrap">
-    <p class="footer-cta">Join our Telegram channel<br>for live updates</p>
-    <a class="handle" href="https://t.me/dingontu">@dingontu</a>
+    <div class="footer-grid">
+      <div>
+        <p class="footer-cta">Join our channel<br>for live updates</p>
+        <a class="handle" href="https://t.me/dingontu">@dingontu</a>
+      </div>
+      <div>
+        <p class="footer-cta">Order straight<br>from our bot</p>
+        <a class="handle handle--dark" href="https://t.me/Dingo_post_form_bot?start=order">@Dingo_post_form_bot</a>
+      </div>
+    </div>
     <p class="fine">Dingo NTU · Supper truck delivery around NTU halls</p>
     <p class="fine credits">Sample food photos from Wikimedia Commons — see <a href="/images/menu/CREDITS.txt">credits</a>.</p>
   </div>
@@ -821,59 +828,138 @@ async function lookupCustomer({ kind, value }) {
   return { found: demo };
 }
 
-const who = $('who'), whoGo = $('who-go'), whoError = $('who-error');
-let lastWho = null;
+const who = $('who');
+let detailsMode = null; // null | 'new' (first-time) | 'edit' (returning, updating)
+const autoFilled = { phone: null, handle: null };
 
 function showDetails(state, parsed) {
+  detailsMode = state === 'new' || state === 'edit' ? state : null;
   $('found').hidden = state !== 'found';
-  $('new-details').hidden = state !== 'new' && state !== 'edit';
-  if (state === 'new' || state === 'edit') {
-    $('first-time-msg').textContent = state === 'new'
-      ? "Looks like it's your first order. We just need a few details."
-      : 'Enter the details we should use from now on.';
-    // Carry over what they typed into the right box. Values we filled in
-    // earlier (and they haven't touched) are replaced; their own typing isn't.
-    for (const kind of ['phone', 'handle']) {
-      const box = $(kind);
-      if (box.value === autoFilled[kind]) box.value = '';
-      if (parsed?.kind === kind && !box.value) {
-        box.value = autoFilled[kind] = kind === 'handle' ? '@' + parsed.value : parsed.value;
-      }
+  $('new-details').hidden = !detailsMode;
+  if (!detailsMode) return;
+  $('first-time-msg').textContent = detailsMode === 'new'
+    ? "Looks like it's your first order. We just need a few details."
+    : 'Enter the details we should use from now on.';
+  // Carry over what they typed into the right box. Values we filled in
+  // earlier (and they haven't touched) are replaced; their own typing isn't.
+  for (const kind of ['phone', 'handle']) {
+    const box = $(kind);
+    if (box.value === autoFilled[kind]) box.value = '';
+    if (parsed?.kind === kind && !box.value) {
+      box.value = autoFilled[kind] = kind === 'handle' ? '@' + parsed.value : parsed.value;
     }
   }
 }
-const autoFilled = { phone: null, handle: null };
 
-async function checkWho() {
-  const parsed = parseWho(who.value);
-  whoError.hidden = !!parsed;
-  if (!parsed) {
-    whoError.textContent = 'Enter an 8-digit phone number (e.g. 91234567) or a Telegram handle (e.g. @yourhandle).';
-    showDetails(null);
-    who.focus();
-    return;
-  }
-  whoGo.disabled = true;
-  whoGo.textContent = 'Checking…';
-  try {
-    const { found } = await lookupCustomer(parsed);
-    lastWho = who.value;
-    showDetails(found ? 'found' : 'new', parsed);
-    if (!found) $('name').focus();
-  } finally {
-    whoGo.disabled = false;
-    whoGo.textContent = 'Continue';
-  }
+const smooth = () => matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+
+/** Scroll the customer back to the thing that needs fixing. */
+function bringBack(target, focusEl = target) {
+  target.scrollIntoView({ behavior: smooth(), block: 'center' });
+  focusEl.focus({ preventScroll: true });
 }
 
-whoGo.addEventListener('click', checkWho);
-who.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); checkWho(); }
+function showError(id, text) {
+  $(id).textContent = text;
+  $(id).hidden = false;
+}
+
+function clearErrors() {
+  for (const id of ['hall-error', 'who-error', 'details-error', 'agree-error']) $(id).hidden = true;
+  document.querySelectorAll('.invalid').forEach(el => el.classList.remove('invalid'));
+  $('form-msg').hidden = true;
+}
+
+// Everything is checked when they press Place order, top to bottom, and they
+// are taken back to the first thing that needs attention.
+$('checkout-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  clearErrors();
+  const msg = $('form-msg');
+  const placeBtn = e.submitter || $('checkout-form').querySelector('[type="submit"]');
+
+  if (cart.size === 0) {
+    msg.textContent = 'Your order is empty. Add something from the menu first.';
+    msg.hidden = false;
+    $('cart').scrollIntoView({ behavior: smooth(), block: 'center' });
+    return;
+  }
+
+  const hall = $('checkout-form').querySelector('input[name="hall"]:checked');
+  if (!hall) {
+    $('halls').classList.add('invalid');
+    showError('hall-error', 'Pick a pickup point.');
+    bringBack($('halls'), $('halls').querySelector('input'));
+    return;
+  }
+
+  const parsed = parseWho(who.value);
+  if (!parsed) {
+    who.classList.add('invalid');
+    showError('who-error', who.value.trim()
+      ? "That doesn't look like a phone number or Telegram handle. Try 91234567 or @yourhandle."
+      : 'Enter your phone number or Telegram handle.');
+    bringBack(who);
+    return;
+  }
+
+  // Look the customer up, unless they've chosen to update their details.
+  if (detailsMode !== 'edit') {
+    placeBtn.disabled = true;
+    placeBtn.textContent = 'Checking…';
+    let found;
+    try {
+      ({ found } = await lookupCustomer(parsed));
+    } finally {
+      placeBtn.disabled = false;
+      placeBtn.textContent = 'Place order';
+    }
+    if (found) {
+      showDetails('found');
+    } else if (!detailsMode) {
+      // Not on file: open the details and bring them back up to fill them in.
+      showDetails('new', parsed);
+      bringBack($('new-details'), $('name'));
+      return;
+    }
+  }
+
+  if (detailsMode) {
+    const bad = [];
+    if (!$('name').value.trim()) bad.push([$('name'), 'name']);
+    if (parseWho($('handle').value)?.kind !== 'handle') bad.push([$('handle'), 'Telegram handle']);
+    if (parseWho($('phone').value)?.kind !== 'phone') bad.push([$('phone'), 'phone number']);
+    if (bad.length) {
+      bad.forEach(([el]) => el.classList.add('invalid'));
+      const names = bad.map(([, n]) => n);
+      const list = names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names.at(-1) : names[0];
+      showError('details-error', `Please check your ${list}.`);
+      bringBack(bad[0][0]);
+      return;
+    }
+  }
+
+  if (!$('agree').checked) {
+    showError('agree-error', 'Please tick this box to confirm you have read the policy.');
+    bringBack($('agree'));
+    return;
+  }
+
+  // Not wired to the backend yet — just tell the user so.
+  msg.innerHTML = 'Online checkout isn\'t live yet. For now, please order through our <a href="https://t.me/Dingo_post_form_bot?start=order">Telegram bot</a>.';
+  msg.hidden = false;
 });
-// Typing a different phone/handle after a result means the result no longer applies.
+
+// Clear a field's red outline as soon as they start fixing it.
+$('checkout-form').addEventListener('input', e => e.target.classList?.remove('invalid'));
+$('checkout-form').addEventListener('change', e => {
+  if (e.target.name === 'hall') { $('halls').classList.remove('invalid'); $('hall-error').hidden = true; }
+  if (e.target.id === 'agree') $('agree-error').hidden = true;
+});
+// A different phone/handle means the "welcome back" no longer applies.
 who.addEventListener('input', () => {
-  whoError.hidden = true;
-  if (lastWho !== null && who.value !== lastWho) { lastWho = null; showDetails(null); }
+  $('who-error').hidden = true;
+  if (!$('found').hidden) showDetails(null);
 });
 $('edit-details').addEventListener('click', () => {
   showDetails('edit', parseWho(who.value));
@@ -881,17 +967,8 @@ $('edit-details').addEventListener('click', () => {
 });
 $('not-me').addEventListener('click', () => {
   who.value = '';
-  lastWho = null;
   showDetails(null);
   who.focus();
-});
-
-// Not wired to the backend yet — just tell the user so.
-$('checkout-form').addEventListener('submit', e => {
-  e.preventDefault();
-  const msg = $('form-msg');
-  msg.hidden = false;
-  msg.innerHTML = 'Online checkout isn\'t live yet. For now, please order through our <a href="https://t.me/Dingo_post_form_bot?start=order">Telegram bot</a>.';
 });
 
 // Phone "View order" bar: only while there's something in the cart and the

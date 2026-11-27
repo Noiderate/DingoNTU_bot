@@ -102,12 +102,32 @@
   .bars .val { text-align: right; font-weight: 700; color: var(--muted); }
 
   .status { display: grid; gap: 10px; margin-top: 14px; }
-  .status div {
-    display: flex; align-items: center; justify-content: space-between;
+  .status__row {
     background: var(--white); border: 2px solid var(--ink); border-radius: 12px;
-    padding: 10px 14px; font-size: 14px; font-weight: 500;
+    font-size: 14px; font-weight: 500;
+    overflow: hidden;
   }
-  .status b { font-family: var(--display); font-weight: 400; font-size: 22px; }
+  .status__label { display: flex; align-items: center; padding: 10px 14px 0; font-weight: 700; }
+  .status__row--single {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-right: 14px;
+  }
+  .status__row--single .status__label { padding-bottom: 10px; }
+  .status b { font-family: var(--display); font-weight: 400; font-size: 22px; line-height: 1.1; }
+
+  /* Verified / Rejected: split down the middle into manual vs automatic. */
+  .status__split {
+    display: grid; grid-template-columns: 1fr 1fr;
+    margin-top: 8px;
+    border-top: 2px solid var(--line);
+  }
+  .status__split > div {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 8px 14px 10px;
+    min-width: 0;
+  }
+  .status__split > div + div { border-left: 2px solid var(--ink); }
+  .status__split span { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; border: 2px solid var(--ink); }
 </style>
 </head>
@@ -182,9 +202,24 @@
       <h2>Payments</h2>
       <p class="sub">PayNow verification status</p>
       <div class="status">
-        <div><span><span class="dot" style="background:#3FA34D"></span>Verified</span><b>—</b></div>
-        <div><span><span class="dot" style="background:var(--amber)"></span>Pending</span><b>—</b></div>
-        <div><span><span class="dot" style="background:var(--red)"></span>Rejected</span><b>—</b></div>
+        <div class="status__row">
+          <div class="status__label"><span class="dot" style="background:#3FA34D"></span>Verified</div>
+          <div class="status__split">
+            <div><span>Manually</span><b>—</b></div>
+            <div><span>Automatically</span><b>—</b></div>
+          </div>
+        </div>
+        <div class="status__row status__row--single">
+          <div class="status__label"><span class="dot" style="background:var(--amber)"></span>Pending</div>
+          <b>—</b>
+        </div>
+        <div class="status__row">
+          <div class="status__label"><span class="dot" style="background:var(--red)"></span>Rejected</div>
+          <div class="status__split">
+            <div><span>Manually</span><b>—</b></div>
+            <div><span>Automatically</span><b>—</b></div>
+          </div>
+        </div>
       </div>
     </section>
 
