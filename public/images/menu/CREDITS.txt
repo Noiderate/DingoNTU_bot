@@ -1,0 +1,14 @@
+Sample menu photos, all from Wikimedia Commons (https://commons.wikimedia.org).
+They are placeholders, not photos of Dingo's own food. Resized and cropped to 720x540.
+
+kani-mayo-bowl.jpg  "Oyakodon 003.jpg" by Ocdp, CC0
+spam-mayo-bowl.jpg  "Pork Chashu Rice Bowl (M) - Kitokito 2023-06-09.jpg" by Andy Li, CC0
+sesame-noodles.jpg  "Sesame Noodles with Chicken, Wou Cha, Paris 002.jpg" by Guilhem Vellut, CC BY 2.0
+kimbap.jpg          "Gimbap (pixabay).jpg" by changupn, CC0
+gyoza.jpg           "Gyoza no Antei - 3.jpg" by Enming Yan, CC BY-SA 4.0
+mantou.jpg          "Deep-fried mantou.jpg" by CNEcija12345, CC BY-SA 4.0
+spam-musubi.jpg     "Spam and egg musubi.jpg" by Dllu, CC BY-SA 4.0
+
+Licenses: https://creativecommons.org/publicdomain/zero/1.0/
+          https://creativecommons.org/licenses/by/2.0/
+          https://creativecommons.org/licenses/by-sa/4.0/

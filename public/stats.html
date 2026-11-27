@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stats — Dingo NTU</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#F2B233">
+
+<link rel="icon" type="image/jpeg" href="/dingo_logo.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+
+<style>
+  .page-head {
+    display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 16px;
+    padding: 22px 0 22px;
+  }
+  .page-head h1 {
+    font-family: var(--display);
+    font-size: clamp(40px, 11vw, 68px);
+    line-height: .95; letter-spacing: .5px; text-transform: uppercase;
+    color: var(--red); margin: 0;
+    text-shadow: 3px 3px 0 rgba(26,26,26,.12);
+  }
+  .page-head p { margin: 8px 0 0; font-weight: 500; }
+
+  .range { display: inline-flex; border: 2px solid var(--ink); border-radius: 999px; overflow: hidden; background: var(--white); }
+  .range button {
+    font: inherit; font-size: 14px; font-weight: 700;
+    border: 0; background: transparent; color: var(--ink);
+    padding: 8px 16px; cursor: pointer;
+  }
+  .range button + button { border-left: 2px solid var(--ink); }
+  .range button[aria-pressed="true"] { background: var(--ink); color: var(--amber); }
+
+  .grid { display: grid; gap: 18px; padding-bottom: 48px; }
+  @media (min-width: 900px) {
+    .grid { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+    .span-12 { grid-column: span 12; }
+    .span-8  { grid-column: span 8; }
+    .span-7  { grid-column: span 7; }
+    .span-5  { grid-column: span 5; }
+    .span-4  { grid-column: span 4; }
+  }
+
+  /* Phones: Orders full width on top, the other two side by side. */
+  .kpis { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi--main { grid-column: 1 / -1; }
+  @media (min-width: 900px) {
+    .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .kpi--main { grid-column: auto; }
+  }
+
+  .card__head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .range--small button { font-size: 13px; padding: 6px 12px; }
+  @media (pointer: coarse) { .range button { min-height: 40px; } }
+
+  .card {
+    background: var(--cream);
+    border: 3px solid var(--ink);
+    border-radius: var(--radius);
+    box-shadow: 5px 5px 0 var(--ink);
+    padding: 18px 20px;
+    min-width: 0;
+  }
+  .card h2 {
+    font-family: var(--display); font-weight: 400;
+    font-size: 22px; letter-spacing: .5px; text-transform: uppercase;
+    margin: 0;
+  }
+  .card .sub { font-size: 13px; color: var(--muted); margin: 2px 0 0; }
+
+  .kpi { background: var(--white); }
+  .kpi__label { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .kpi__value { font-family: var(--display); font-size: clamp(30px, 8vw, 42px); line-height: 1.1; margin-top: 6px; }
+  .kpi__delta { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  .placeholder {
+    margin-top: 16px;
+    display: grid; place-items: center;
+    text-align: center;
+    color: var(--muted); font-size: 14px; font-weight: 500;
+    border: 2px dashed rgba(26,26,26,.25);
+    border-radius: 12px;
+    background:
+      repeating-linear-gradient(0deg, transparent 0 47px, rgba(26,26,26,.06) 47px 48px);
+  }
+  .placeholder--chart { height: 260px; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14px; }
+  th, td { padding: 10px 8px; text-align: left; border-bottom: 2px solid var(--line); }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); border-bottom-color: var(--ink); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+
+  .bars { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; }
+  .bars li { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 4px 10px; font-size: 13.5px; }
+  .bars .track { grid-column: 1 / -1; height: 10px; border-radius: 999px; background: var(--white); border: 2px solid var(--ink); }
+  .bars .val { text-align: right; font-weight: 700; color: var(--muted); }
+
+  .status { display: grid; gap: 10px; margin-top: 14px; }
+  .status div {
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--white); border: 2px solid var(--ink); border-radius: 12px;
+    padding: 10px 14px; font-size: 14px; font-weight: 500;
+  }
+  .status b { font-family: var(--display); font-weight: 400; font-size: 22px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; border: 2px solid var(--ink); }
+</style>
+</head>
+<body>
+
+<span class="blob blob--cream-tl" aria-hidden="true"></span>
+<span class="blob blob--red-tl" aria-hidden="true"></span>
+
+<header class="site-header">
+  <div class="wrap bar">
+    <a class="brandmark" href="/">
+      <img class="brandmark__logo" src="/dingo_logo.jpg" alt="" width="640" height="640">
+      <span>DINGO NTU</span>
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="/">Menu</a>
+      <a href="/stats.html" aria-current="page">Stats</a>
+      <a class="nav__ext" href="https://t.me/dingontu">@dingontu&nbsp;↗</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="page-head">
+    <div>
+      <h1>Stats</h1>
+      <p>Orders and pickup activity. No data connected yet.</p>
+    </div>
+    <div class="range" role="group" aria-label="Time range">
+      <button type="button" aria-pressed="true">Today</button>
+      <button type="button" aria-pressed="false">7 days</button>
+      <button type="button" aria-pressed="false">30 days</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="span-12 kpis">
+      <div class="card kpi kpi--main">
+        <div class="kpi__label">Orders</div>
+        <div class="kpi__value">—</div>
+        <div class="kpi__delta">vs previous period: —</div>
+      </div>
+      <div class="card kpi">
+        <div class="kpi__label">Avg order</div>
+        <div class="kpi__value">—</div>
+        <div class="kpi__delta">vs previous period: —</div>
+      </div>
+      <div class="card kpi">
+        <div class="kpi__label">Items sold</div>
+        <div class="kpi__value">—</div>
+        <div class="kpi__delta">vs previous period: —</div>
+      </div>
+    </div>
+
+    <section class="card span-8">
+      <div class="card__head">
+        <div>
+          <h2>Orders over time</h2>
+          <p class="sub" id="scale-sub">Orders per day</p>
+        </div>
+        <div class="range range--small" role="group" aria-label="Chart scale" data-scale>
+          <button type="button" aria-pressed="false" data-unit="hour">Hour</button>
+          <button type="button" aria-pressed="true" data-unit="day">Day</button>
+          <button type="button" aria-pressed="false" data-unit="week">Week</button>
+          <button type="button" aria-pressed="false" data-unit="month">Month</button>
+        </div>
+      </div>
+      <div class="placeholder placeholder--chart">No data yet</div>
+    </section>
+
+    <section class="card span-4">
+      <h2>Payments</h2>
+      <p class="sub">PayNow verification status</p>
+      <div class="status">
+        <div><span><span class="dot" style="background:#3FA34D"></span>Verified</span><b>—</b></div>
+        <div><span><span class="dot" style="background:var(--amber)"></span>Pending</span><b>—</b></div>
+        <div><span><span class="dot" style="background:var(--red)"></span>Rejected</span><b>—</b></div>
+      </div>
+    </section>
+
+    <section class="card span-7">
+      <h2>Top dishes</h2>
+      <p class="sub">By quantity sold</p>
+      <table>
+        <thead><tr><th>Dish</th><th class="num">Qty</th></tr></thead>
+        <tbody>
+          <tr><td>Kani Mayo Rice Bowl</td><td class="num">—</td></tr>
+          <tr><td>Spam Mayo Rice Bowl</td><td class="num">—</td></tr>
+          <tr><td>Sesame Noodles</td><td class="num">—</td></tr>
+          <tr><td>Kimbap</td><td class="num">—</td></tr>
+          <tr><td>Pan-Fried Gyozas (10pcs)</td><td class="num">—</td></tr>
+          <tr><td>Golden Crispy Mantou (6pcs)</td><td class="num">—</td></tr>
+          <tr><td>Spam &amp; Egg Musubi</td><td class="num">—</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card span-5">
+      <h2>Orders by pickup point</h2>
+      <p class="sub">Share of orders per stop</p>
+      <ul class="bars">
+        <li><span>#1 North Hill Carpark</span><span class="val">—</span><span class="track"></span></li>
+        <li><span>#2 Hall 9 Drop Off</span><span class="val">—</span><span class="track"></span></li>
+        <li><span>#3 Hall 11 Drop Off</span><span class="val">—</span><span class="track"></span></li>
+        <li><span>#4 Tamarind/Saraca Drop Off</span><span class="val">—</span><span class="track"></span></li>
+        <li><span>#5 Hall 14 Drop Off</span><span class="val">—</span><span class="track"></span></li>
+        <li><span>#6 Hall 12 Amphitheatre</span><span class="val">—</span><span class="track"></span></li>
+        <li><span>#7 Hall 3/16 Admin Office</span><span class="val">—</span><span class="track"></span></li>
+        <li><span>#8 Canteen 2 Walkway</span><span class="val">—</span><span class="track"></span></li>
+        <li><span>#9 Hall 6 Drop Off</span><span class="val">—</span><span class="track"></span></li>
+        <li><span>#10 Hall 5 Drop Off</span><span class="val">—</span><span class="track"></span></li>
+        <li><span>#11 Old Hall 7 Drop Off</span><span class="val">—</span><span class="track"></span></li>
+      </ul>
+    </section>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <span class="blob blob--red-br" aria-hidden="true"></span>
+  <div class="wrap">
+    <p class="fine">Dingo NTU · Supper truck delivery around NTU halls</p>
+  </div>
+</footer>
+
+<script>
+  // UI only: toggles which button is selected. No data is loaded yet.
+  const SCALE_LABEL = { hour: 'Orders per hour', day: 'Orders per day', week: 'Orders per week', month: 'Orders per month' };
+  document.querySelectorAll('.range').forEach(group => {
+    group.addEventListener('click', e => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      group.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b === btn));
+      if (group.hasAttribute('data-scale')) {
+        document.getElementById('scale-sub').textContent = SCALE_LABEL[btn.dataset.unit];
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

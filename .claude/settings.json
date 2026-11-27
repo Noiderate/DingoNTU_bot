@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git init *)"
+      "Bash(git init *)",
+      "ClaudeInChromeDomain(localhost:5174)"
     ]
   }
 }

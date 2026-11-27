@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Dingo NTU — Supper Truck Delivery</title>
-<meta name="description" content="Late-night supper delivered to your hall at NTU. Order on Telegram.">
+<meta name="description" content="Late-night supper delivered to your hall at NTU. Pick your food, choose a pickup point, and check out.">
 
 <!-- Open Graph: this link gets pasted into Telegram a lot, so it should preview well. -->
 <meta property="og:title" content="Dingo NTU — Supper Truck Delivery">
-<meta property="og:description" content="Late-night supper delivered to your hall at NTU. Order on Telegram.">
+<meta property="og:description" content="Late-night supper delivered to your hall at NTU.">
 <meta property="og:type" content="website">
 <meta property="og:image" content="/dingo_logo.jpg">
 <meta property="og:image:alt" content="Dingo logo">
@@ -18,294 +18,428 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
 
 <style>
-  :root {
-    --amber:      #ecee66;
-    --amber-deep: #E3A020;
-    --red:        #D32F2F;
-    --red-deep:   #B71C1C;
-    --ink:        #1A1A1A;
-    --cream:      #FFF8EC;
-    --white:      #FFFFFF;
-
-    --display: 'Anton', 'Arial Narrow', sans-serif;
-    --body:    'DM Sans', system-ui, -apple-system, sans-serif;
-
-    --gutter: 22px;
-    --radius: 18px;
-  }
-
-  * { box-sizing: border-box; }
-
-  html, body {
-    margin: 0;
-    padding: 0;
-    /* The brand is a fixed warm yellow; this page deliberately does not invert
-       for dark mode, the same way a printed flyer does not. */
-    background: var(--amber);
-    color: var(--ink);
-    font-family: var(--body);
-    /* Blobs are positioned off-canvas, so this keeps phones from scrolling sideways. */
-    overflow-x: hidden;
-  }
-
-  body { line-height: 1.55; }
-
-  .wrap {
-    width: 100%;
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 0 var(--gutter);
-  }
-
-  /* --- Decorative blobs, echoing the flyer artwork ------------------------ */
-  .blob {
-    position: absolute;
-    border-radius: 50%;
-    pointer-events: none;
-    /* Negative so it paints behind non-positioned siblings (like .wrap) instead
-       of on top of them -- a positioned z-index:0 box otherwise wins over
-       in-flow content in paint order. */
-    z-index: -1;
-  }
-  .blob--cream-tl {
-    top: -160px; left: -140px;
-    width: 340px; height: 340px;
-    background: var(--cream);
-  }
-  .blob--red-tl {
-    top: -90px; left: -110px;
-    width: 220px; height: 220px;
-    background: var(--red);
-  }
-  .blob--red-br {
-    right: -120px; bottom: -180px;
-    width: 400px; height: 400px;
-    background: var(--red);
-    opacity: .9;
-  }
-
-  /* --- Header ------------------------------------------------------------ */
-  header {
-    position: relative;
-    z-index: 2;
-    padding: 20px 0 0;
-  }
-  .bar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px 12px;
-  }
-  .brandmark {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-family: var(--display);
-    font-size: 20px;
-    letter-spacing: .5px;
-  }
-  .brandmark__logo {
-    display: block;
-    width: 64px;
-    height: 64px;
-    flex: 0 0 64px;
-    border-radius: 50%;
-    object-fit: contain;
-  }
-
-  .bar__link {
-    font-weight: 700;
-    font-size: 14px;
-    color: var(--ink);
+  /* ---------- Telegram bot banner ------------------------------------- */
+  .botlink {
+    display: flex; align-items: center; gap: 12px;
+    margin-top: 14px;
+    padding: 12px 16px;
+    background: var(--ink); color: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 16px;
+    box-shadow: 4px 4px 0 var(--red);
     text-decoration: none;
-    border-bottom: 2px solid rgba(26,26,26,.25);
-    padding-bottom: 2px;
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .botlink:hover .botlink__cta { background: var(--red-deep); }
+  .botlink:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 var(--red); }
+  .botlink:focus-visible { outline: 3px solid var(--red); outline-offset: 3px; }
+  .botlink__icon {
+    flex: 0 0 38px; width: 38px; height: 38px;
+    display: grid; place-items: center;
+    border-radius: 50%; background: #29A9EB; color: var(--white);
+  }
+  .botlink__icon svg { width: 20px; height: 20px; margin-left: -2px; }
+  .botlink__text { flex: 1; min-width: 0; font-weight: 700; font-size: 15px; line-height: 1.3; }
+  .botlink__cta {
+    flex: 0 0 auto;
+    font-weight: 700; font-size: 14px;
+    background: var(--red); color: var(--white);
+    border-radius: 999px;
+    padding: 8px 14px;
     white-space: nowrap;
   }
-  .bar__link:hover { border-bottom-color: var(--ink); }
+  @media (max-width: 420px) {
+    .botlink { gap: 10px; padding: 10px 12px; }
+    .botlink__icon { flex-basis: 32px; width: 32px; height: 32px; }
+    .botlink__icon svg { width: 17px; height: 17px; }
+    .botlink__text { font-size: 14px; }
+    .botlink__cta { font-size: 13px; padding: 7px 11px; }
+  }
+  @media (max-width: 340px) { .botlink__icon { display: none; } }
 
-  /* --- Hero -------------------------------------------------------------- */
-  .hero {
-    position: relative;
-    z-index: 2;
-    padding: 28px 0 40px;
+  /* ---------- Page layout: menu + sticky cart ------------------------- */
+  /* Phones: menu -> cart -> checkout, one column.
+     Laptops: menu and checkout on the left, cart sticky on the right. */
+  .shop {
     display: grid;
-    gap: 28px;
+    gap: 24px;
+    padding-top: 16px;
+    padding-bottom: 48px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "menu" "cart" "checkout";
   }
-
-  .eyebrow {
-    font-family: var(--display);
-    font-size: clamp(26px, 8vw, 44px);
-    letter-spacing: 1px;
-    margin: 0;
-    text-transform: uppercase;
-  }
-
-  h1 {
-    font-family: var(--display);
-    /* Scales from phone to desktop without a media query. */
-    font-size: clamp(44px, 13vw, 96px);
-    line-height: .92;
-    letter-spacing: .5px;
-    text-transform: uppercase;
-    color: var(--red);
-    margin: 6px 0 0;
-    text-shadow: 3px 3px 0 rgba(26,26,26,.12);
-  }
-
-  .lede {
-    font-size: clamp(16px, 4.2vw, 19px);
-    font-weight: 500;
-    max-width: 30ch;
-    margin: 18px 0 0;
-  }
-
-  .cta-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin-top: 26px;
-  }
-
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    padding: 15px 28px;
-    border-radius: 999px;
-    font-weight: 700;
-    font-size: 16px;
-    text-decoration: none;
-    border: 3px solid var(--ink);
-    transition: transform .12s ease, box-shadow .12s ease;
-    box-shadow: 4px 4px 0 var(--ink);
-  }
-  .btn:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 var(--ink); }
-  .btn:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
-
-  .btn--primary { background: var(--red); color: var(--white); }
-  .btn--primary:hover { background: var(--red-deep); }
-
-  .btn--ghost { background: var(--cream); color: var(--ink); }
-  .btn--ghost:hover { background: var(--white); }
-
-  .btn svg { width: 20px; height: 20px; flex: 0 0 20px; }
-
-  /* --- Van --------------------------------------------------------------- */
-  .van {
-    width: 100%;
-    max-width: 460px;
-    height: auto;
-    justify-self: center;
-  }
-
-  @media (min-width: 860px) {
-    .hero {
-      grid-template-columns: 1.05fr .95fr;
-      align-items: center;
-      padding: 40px 0 70px;
+  #menu { grid-area: menu; }
+  #checkout { grid-area: checkout; }
+  .shop__aside { grid-area: cart; min-width: 0; }
+  @media (min-width: 980px) {
+    .shop {
+      gap: 28px;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      grid-template-areas: "menu cart" "checkout cart";
+      align-items: start;
     }
-    .van { max-width: 100%; }
+    .shop__aside { position: sticky; top: 16px; }
   }
 
-  /* --- Steps ------------------------------------------------------------- */
-  .steps {
-    position: relative;
-    z-index: 2;
+  /* ---------- Menu ---------------------------------------------------- */
+  .panel {
     background: var(--cream);
-    border-top: 4px solid var(--ink);
-    border-bottom: 4px solid var(--ink);
-    padding: 44px 0;
-  }
-  .steps h2 {
-    font-family: var(--display);
-    font-size: clamp(28px, 7vw, 40px);
-    text-transform: uppercase;
-    margin: 0 0 26px;
-    letter-spacing: .5px;
-  }
-  .grid {
-    display: grid;
-    gap: 16px;
-    grid-template-columns: 1fr;
-  }
-  @media (min-width: 720px) {
-    .grid { grid-template-columns: repeat(3, 1fr); }
-  }
-
-  .card {
-    background: var(--white);
     border: 3px solid var(--ink);
     border-radius: var(--radius);
+    box-shadow: 6px 6px 0 var(--ink);
     padding: 22px;
-    box-shadow: 5px 5px 0 var(--ink);
   }
-  .card__num {
-    font-family: var(--display);
-    font-size: 30px;
-    color: var(--red);
-    line-height: 1;
-  }
-  .card h3 {
-    font-size: 17px;
-    margin: 10px 0 6px;
-    font-weight: 700;
-  }
-  .card p {
-    margin: 0;
-    font-size: 15px;
-    color: #444;
-  }
+  @media (max-width: 480px) { .panel { padding: 16px; } }
 
-  /* --- Footer ------------------------------------------------------------ */
-  footer {
-    position: relative;
-    z-index: 2;
-    /* Clips the decorative blob at the footer's own edge so it can't extend
-       the document's scrollable height past the visible content. */
-    overflow: hidden;
-    padding: 40px 0 52px;
-    text-align: center;
-  }
-  .footer-cta {
+  .panel__title {
     font-family: var(--display);
-    font-size: clamp(22px, 6vw, 32px);
+    font-size: clamp(26px, 7vw, 34px);
     text-transform: uppercase;
-    margin: 0 0 18px;
+    letter-spacing: .5px;
+    margin: 0;
+    line-height: 1.05;
   }
-  .handle {
-    display: inline-block;
-    font-weight: 700;
-    color: var(--ink);
-    text-decoration: none;
-    background: var(--cream);
-    border: 3px solid var(--ink);
-    border-radius: 999px;
-    padding: 10px 22px;
-    box-shadow: 4px 4px 0 var(--ink);
-  }
-  .handle:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 var(--ink); }
-  .fine {
-    margin-top: 26px;
-    font-size: 13px;
-    color: rgba(26,26,26,.7);
-  }
+  .panel__sub { margin: 6px 0 0; font-size: 14px; color: var(--muted); }
 
-  @media (max-width: 400px) {
-    .brandmark__logo {
-      width: 48px;
-      height: 48px;
-      flex-basis: 48px;
+  .filters {
+    display: grid;
+    gap: 12px;
+    margin: 18px 0 6px;
+  }
+  .search {
+    position: relative;
+  }
+  .search svg {
+    position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+    width: 18px; height: 18px; color: var(--muted); pointer-events: none;
+  }
+  #search { padding-left: 42px; } /* id beats the shared input rule in site.css */
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  /* Phones: one swipeable row instead of wrapping onto two lines. */
+  @media (max-width: 559px) {
+    .chips {
+      flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+      margin: 0 -16px; padding: 2px 16px 4px;
     }
-    .brandmark { font-size: 17px; }
+    .chips::-webkit-scrollbar { display: none; }
+    .chip { flex: 0 0 auto; }
+  }
+  .chip {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 7px 16px;
+    border-radius: 999px;
+    border: 2px solid var(--ink);
+    background: var(--white);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .chip[aria-pressed="true"] { background: var(--ink); color: var(--amber); }
+  .chip:focus-visible { outline: 3px solid var(--red); outline-offset: 2px; }
+
+  .cat { margin-top: 26px; }
+  .cat__head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+    border-bottom: 3px solid var(--ink);
+    padding-bottom: 8px;
+    margin-bottom: 16px;
+  }
+  .cat__head h3 {
+    font-family: var(--display);
+    font-size: 24px;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+    margin: 0;
+  }
+  .cat__count { font-size: 13px; font-weight: 700; color: var(--muted); }
+
+  .dishes {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr));
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    * { transition: none !important; }
+  .dish {
+    display: flex;
+    flex-direction: column;
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 4px 4px 0 var(--ink);
+    transition: box-shadow .12s ease, transform .12s ease;
   }
+  .dish.in-cart { box-shadow: 4px 4px 0 var(--red); border-color: var(--red); }
+  .dish__img {
+    position: relative;
+    aspect-ratio: 4 / 3;
+    background: var(--amber-soft);
+    border-bottom: 3px solid var(--ink);
+  }
+  .dish.in-cart .dish__img { border-bottom-color: var(--red); }
+  .dish__img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .badge {
+    position: absolute; top: 10px; left: 10px;
+    font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
+    background: var(--red); color: var(--white);
+    border: 2px solid var(--ink);
+    border-radius: 999px;
+    padding: 3px 9px;
+  }
+  .dish__body { display: flex; flex-direction: column; gap: 6px; padding: 14px; flex: 1; }
+  .dish__name { font-size: 16px; font-weight: 700; margin: 0; line-height: 1.25; }
+  .dish__desc { font-size: 13.5px; color: var(--muted); margin: 0; line-height: 1.45; }
+  .dish__foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    margin-top: auto; padding-top: 10px;
+  }
+  .price { font-weight: 700; font-size: 17px; }
+  .price small { font-size: 11px; font-weight: 700; color: var(--muted); margin-left: 2px; }
+
+  .add {
+    font: inherit; font-weight: 700; font-size: 14px;
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--red); color: var(--white);
+    border: 2px solid var(--ink);
+    border-radius: 999px;
+    padding: 7px 14px;
+    cursor: pointer;
+    box-shadow: 2px 2px 0 var(--ink);
+  }
+  .add:hover { background: var(--red-deep); }
+  .add:active { transform: translate(2px, 2px); box-shadow: none; }
+  .add:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+
+  .stepper {
+    display: inline-flex; align-items: center;
+    border: 2px solid var(--ink);
+    border-radius: 999px;
+    background: var(--white);
+    overflow: hidden;
+  }
+  .stepper button {
+    font: inherit; font-weight: 700; font-size: 18px; line-height: 1;
+    width: 34px; height: 32px;
+    border: 0; background: transparent; color: var(--ink);
+    cursor: pointer;
+  }
+  .stepper button:hover { background: var(--amber-soft); }
+  .stepper button:focus-visible { outline: 3px solid var(--red); outline-offset: -3px; }
+  .stepper output { min-width: 22px; text-align: center; font-weight: 700; font-size: 15px; }
+
+  /* Phones: each dish is a compact row (photo left, details right) so more
+     of the menu fits on screen without losing the picture. */
+  @media (max-width: 559px) {
+    .dishes { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+    .dish { flex-direction: row; box-shadow: 3px 3px 0 var(--ink); }
+    .dish.in-cart { box-shadow: 3px 3px 0 var(--red); }
+    .dish__img {
+      flex: 0 0 34%;
+      max-width: 132px;
+      min-height: 132px;
+      aspect-ratio: auto;
+      border-bottom: 0;
+      border-right: 3px solid var(--ink);
+    }
+    .dish.in-cart .dish__img { border-right-color: var(--red); }
+    .dish__img img { position: absolute; inset: 0; }
+    .badge { top: 6px; left: 6px; font-size: 10px; padding: 2px 7px; }
+    .dish__body { padding: 11px 12px; gap: 4px; min-width: 0; }
+    .dish__name { font-size: 15px; }
+    .dish__desc {
+      font-size: 13px;
+      display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .dish__foot { padding-top: 6px; }
+    .price { font-size: 16px; }
+    .cat { margin-top: 22px; }
+    .cat__head h3 { font-size: 21px; }
+  }
+
+  /* Bigger touch targets on touch screens. */
+  @media (pointer: coarse) {
+    .stepper button, .cart__controls .stepper button { width: 40px; height: 38px; }
+    .add { min-height: 40px; padding: 8px 16px; }
+    .chip { min-height: 40px; }
+    .link-btn { padding: 10px 4px; }
+  }
+
+  .empty-results {
+    margin: 24px 0 4px; padding: 18px;
+    text-align: center; font-weight: 500; color: var(--muted);
+    border: 2px dashed rgba(26,26,26,.3); border-radius: 12px;
+  }
+
+  /* ---------- Cart ---------------------------------------------------- */
+  .cart { background: var(--white); }
+  .cart__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .cart__count { font-size: 13px; font-weight: 700; color: var(--muted); }
+  .cart__list { list-style: none; margin: 16px 0 0; padding: 0; }
+  .cart__item {
+    display: grid;
+    grid-template-columns: 52px 1fr auto;
+    gap: 6px 12px;
+    align-items: center;
+    padding: 12px 0;
+    border-top: 2px solid var(--line);
+  }
+  .cart__item:first-child { border-top: 0; padding-top: 0; }
+  .cart__thumb {
+    width: 52px; height: 52px; border-radius: 10px; object-fit: cover;
+    border: 2px solid var(--ink); grid-row: span 2;
+  }
+  .cart__name { font-size: 14px; font-weight: 700; line-height: 1.3; }
+  .cart__line { font-size: 14px; font-weight: 700; text-align: right; }
+  .cart__controls { grid-column: 2 / 4; display: flex; align-items: center; justify-content: space-between; }
+  .cart__controls .stepper button { width: 30px; height: 28px; font-size: 16px; }
+  .link-btn {
+    font: inherit; font-size: 13px; font-weight: 700;
+    background: none; border: 0; padding: 4px 0;
+    color: var(--muted); text-decoration: underline; cursor: pointer;
+  }
+  .link-btn:hover { color: var(--red); }
+
+  .cart__empty {
+    margin: 16px 0 0; padding: 22px 12px;
+    text-align: center; color: var(--muted); font-size: 14px;
+    border: 2px dashed rgba(26,26,26,.25); border-radius: 12px;
+  }
+  .cart__empty strong { display: block; color: var(--ink); font-size: 15px; margin-bottom: 4px; }
+
+  .coupon { display: flex; gap: 8px; margin-top: 18px; }
+  .coupon input { flex: 1; min-width: 0; }
+
+  .totals { margin: 16px 0 0; padding-top: 14px; border-top: 3px solid var(--ink); display: grid; gap: 6px; }
+  .totals div { display: flex; justify-content: space-between; font-size: 14px; }
+  .totals .grand { font-size: 18px; font-weight: 700; margin-top: 4px; }
+  .totals dd { margin: 0; font-weight: 700; }
+  .totals dt { color: var(--muted); }
+  .totals .grand dt { color: var(--ink); }
+
+  .cart > .btn { width: 100%; justify-content: center; margin-top: 16px; }
+  .coupon .btn { flex: 0 0 auto; }
+
+  /* ---------- Checkout ------------------------------------------------ */
+  fieldset { border: 0; margin: 22px 0 0; padding: 0; min-width: 0; }
+  legend {
+    font-family: var(--display);
+    font-size: 20px; letter-spacing: .5px; text-transform: uppercase;
+    padding: 0; margin-bottom: 4px;
+  }
+  .hint { font-size: 13.5px; color: var(--muted); margin: 0 0 12px; }
+  .hint a { color: var(--ink); font-weight: 700; }
+
+  .halls {
+    display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  }
+  .hall { position: relative; }
+  .hall input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+  .hall span {
+    display: flex; align-items: center; gap: 10px;
+    height: 100%;
+    padding: 11px 14px;
+    background: var(--white);
+    border: 2px solid var(--ink);
+    border-radius: 12px;
+    font-size: 14px; font-weight: 500;
+  }
+  .hall b {
+    flex: 0 0 auto;
+    font-family: var(--display); font-weight: 400; font-size: 15px;
+    min-width: 30px; height: 30px;
+    display: grid; place-items: center;
+    border-radius: 999px; border: 2px solid var(--ink);
+    background: var(--amber-soft);
+  }
+  .hall input:checked + span { background: var(--ink); color: var(--white); }
+  .hall input:checked + span b { background: var(--red); color: var(--white); border-color: var(--white); }
+  .hall input:focus-visible + span { outline: 3px solid var(--red); outline-offset: 2px; }
+
+  .fields { display: grid; gap: 14px; grid-template-columns: 1fr; }
+  @media (min-width: 640px) { .fields { grid-template-columns: 1fr 1fr; } .fields .full { grid-column: 1 / -1; } }
+  .field label { display: block; font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+  .req { color: var(--red); }
+
+  .lookup { display: flex; gap: 8px; }
+  .lookup input { flex: 1; min-width: 0; }
+  .lookup .btn { flex: 0 0 auto; }
+  .lookup .btn[disabled] { opacity: .6; cursor: progress; }
+  .field-error { margin: 6px 0 0; font-size: 13.5px; font-weight: 700; color: var(--red); }
+
+  .found {
+    display: flex; gap: 12px; align-items: flex-start;
+    margin-top: 14px; padding: 14px 16px;
+    background: var(--white);
+    border: 2px solid var(--ink); border-radius: 12px;
+    font-size: 14px;
+  }
+  .found strong { display: block; font-size: 15px; }
+  .found__tick {
+    flex: 0 0 28px; width: 28px; height: 28px;
+    display: grid; place-items: center;
+    border-radius: 50%; background: #3FA34D; color: var(--white); font-weight: 700;
+  }
+  .found__actions { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; }
+
+  #new-details { margin-top: 14px; }
+  .first-time { margin: 0 0 12px; font-size: 14px; font-weight: 500; }
+  .notes-field { margin-top: 14px; }
+
+  .notice {
+    margin-top: 22px;
+    background: var(--white);
+    border: 2px solid var(--ink);
+    border-radius: 12px;
+    padding: 16px 18px;
+    font-size: 14px;
+  }
+  .notice p { margin: 0 0 10px; }
+  .notice p:last-child { margin-bottom: 0; }
+
+  .agree { display: flex; gap: 10px; align-items: flex-start; margin-top: 16px; font-size: 14px; font-weight: 500; }
+  .agree input { width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--red); flex: 0 0 20px; }
+
+  .place {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px;
+    margin-top: 22px; padding-top: 18px; border-top: 3px solid var(--ink);
+  }
+  .place__total { font-size: 15px; font-weight: 500; }
+  .place__total strong { font-family: var(--display); font-weight: 400; font-size: 30px; display: block; line-height: 1.05; }
+
+  .form-msg {
+    margin-top: 14px; padding: 12px 14px;
+    border-radius: 10px; border: 2px solid var(--ink);
+    background: var(--amber); font-size: 14px; font-weight: 500;
+  }
+  .form-msg a { color: var(--ink); font-weight: 700; }
+
+  /* ---------- Mobile cart bar ----------------------------------------- */
+  .cartbar {
+    position: fixed; left: 12px; right: 12px; z-index: 20;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px)); /* clear the iPhone home bar */
+    max-width: 520px; margin: 0 auto;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 18px;
+    background: var(--ink); color: var(--white);
+    border-radius: 999px;
+    text-decoration: none; font-weight: 700; font-size: 15px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.25);
+  }
+  .cartbar[hidden] { display: none; }
+  .cartbar__count {
+    display: inline-grid; place-items: center;
+    min-width: 26px; height: 26px; padding: 0 6px; margin-right: 8px;
+    border-radius: 999px; background: var(--red); font-size: 13px;
+  }
+  .cartbar:active { transform: scale(.98); }
+  body.has-cartbar { padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+  @media (min-width: 980px) { .cartbar { display: none !important; } body.has-cartbar { padding-bottom: 0; } }
 </style>
 </head>
 <body>
@@ -313,103 +447,473 @@
 <span class="blob blob--cream-tl" aria-hidden="true"></span>
 <span class="blob blob--red-tl" aria-hidden="true"></span>
 
-<header>
+<header class="site-header">
   <div class="wrap bar">
-    <div class="brandmark">
-      <img class="brandmark__logo" src="/dingo_logo.jpg" alt="Dingo logo" width="640" height="640">
+    <a class="brandmark" href="/">
+      <img class="brandmark__logo" src="/dingo_logo.jpg" alt="" width="640" height="640">
       <span>DINGO NTU</span>
-    </div>
-
-    <!-- CHANGE ME: your Telegram channel -->
-    <a class="bar__link" href="https://t.me/dingontu">@dingontu&nbsp;↗</a>
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="/" aria-current="page">Menu</a>
+      <a href="/stats.html">Stats</a>
+      <a class="nav__ext" href="https://t.me/dingontu">@dingontu&nbsp;↗</a>
+    </nav>
   </div>
 </header>
 
 <main>
-  <section class="wrap hero">
-    <div>
-      <p class="eyebrow">Dingo NTU</p>
-      <h1>Supper<br>Truck<br>Delivery</h1>
-      <p class="lede">
-        Late-night supper, driven straight to your hall. Order in a few taps on Telegram.
-      </p>
+  <!-- ?start=order makes Telegram send "/start order", which the bot handles
+       exactly like /start (same deep link as the channel post). -->
+  <div class="wrap">
+    <a class="botlink" href="https://t.me/Dingo_post_form_bot?start=order">
+      <span class="botlink__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.3 18.7 19c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.4-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.3 12.9l-4.8-1.5c-1-.3-1-1 .2-1.5l18.9-7.3c.9-.3 1.6.2 1.3 1.7Z"/></svg>
+      </span>
+      <span class="botlink__text">Want to order straight from our Telegram bot?</span>
+      <span class="botlink__cta">Click here <span aria-hidden="true">→</span></span>
+    </a>
+  </div>
 
-      <div class="cta-row">
-        <a class="btn btn--primary" href="https://t.me/Dingo_post_form_bot?start=order">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M21.9 4.3 18.7 19c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.4-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.3 12.9l-4.8-1.5c-1-.3-1-1 .2-1.5l18.9-7.3c.9-.3 1.6.2 1.3 1.7Z"/>
-          </svg>
-          Order now
-        </a>
+  <div class="wrap shop">
+      <!-- ===== Menu ===== -->
+      <section class="panel" id="menu" aria-labelledby="menu-title">
+        <h2 class="panel__title" id="menu-title">Tonight's menu</h2>
 
-        <!-- CHANGE ME: your Telegram channel -->
-        <a class="btn btn--ghost" href="https://t.me/dingontu">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M21.9 4.3 18.7 19c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.4-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.3 12.9l-4.8-1.5c-1-.3-1-1 .2-1.5l18.9-7.3c.9-.3 1.6.2 1.3 1.7Z"/>
-          </svg>
-          Live updates
-        </a>
-      </div>
-    </div>
+        <div class="filters">
+          <label class="search">
+            <span class="sr-only">Search the menu</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input type="search" id="search" placeholder="Search dishes" autocomplete="off">
+          </label>
+          <div class="chips" id="chips" role="group" aria-label="Filter by category"></div>
+        </div>
 
-    <svg class="van" viewBox="0 0 420 260" role="img"
-         aria-label="Illustration of a yellow delivery van">
-      <g stroke="#1A1A1A" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
-        <!-- body -->
-        <path d="M40 180V96c0-16 12-28 28-28h214c14 0 26 6 34 17l30 40c5 7 8 15 8 23v32c0 8-7 15-15 15H55c-8 0-15-7-15-15Z"
-              fill="#F2B233"/>
-        <!-- cream upper band -->
-        <path d="M40 112V96c0-16 12-28 28-28h214c14 0 26 6 34 17l19 27Z" fill="#FFF8EC"/>
-        <!-- windows -->
-        <rect x="74"  y="96" width="72" height="46" rx="9" fill="#FFF8EC"/>
-        <rect x="160" y="96" width="72" height="46" rx="9" fill="#FFF8EC"/>
-        <path d="M250 96h32c6 0 12 3 15 8l17 24c3 5 0 14-7 14h-57c-6 0-11-5-11-11v-24c0-6 5-11 11-11Z"
-              fill="#FFF8EC"/>
-        <!-- side vents -->
-        <path d="M86 164h58" stroke-width="6"/>
-        <path d="M86 178h58" stroke-width="6"/>
-        <!-- wheels -->
-        <circle cx="118" cy="205" r="31" fill="#FFF8EC"/>
-        <circle cx="300" cy="205" r="31" fill="#FFF8EC"/>
-      </g>
-      <circle cx="118" cy="205" r="12" fill="#1A1A1A"/>
-      <circle cx="300" cy="205" r="12" fill="#1A1A1A"/>
-    </svg>
-  </section>
+        <div id="menu-list"></div>
+        <p class="empty-results" id="no-results" hidden>No dishes match that search.</p>
+      </section>
 
-  <section class="steps">
-    <div class="wrap">
-      <h2>How it works</h2>
-      <div class="grid">
-        <article class="card">
-          <div class="card__num">01</div>
-          <h3>Pick your hall</h3>
-          <p>Open the bot and choose where you want your supper dropped off.</p>
-        </article>
-        <article class="card">
-          <div class="card__num">02</div>
-          <h3>Build your order</h3>
-          <p>Tap what you want. We only show food that is actually still in stock.</p>
-        </article>
-        <article class="card">
-          <div class="card__num">03</div>
-          <h3>PayNow &amp; wait</h3>
-          <p>Send your payment screenshot. It is checked automatically in seconds.</p>
-        </article>
-      </div>
-    </div>
-  </section>
+      <!-- ===== Cart ===== -->
+      <aside class="shop__aside" aria-label="Your order">
+        <section class="panel cart" id="cart">
+          <div class="cart__head">
+            <h2 class="panel__title">Your order</h2>
+            <span class="cart__count" id="cart-count" aria-live="polite">0 items</span>
+          </div>
+
+          <ul class="cart__list" id="cart-list"></ul>
+          <div class="cart__empty" id="cart-empty">
+            <strong>Nothing here yet</strong>
+            Add something from the menu.
+          </div>
+
+          <div class="coupon">
+            <label class="sr-only" for="coupon">Coupon code</label>
+            <input id="coupon" placeholder="Coupon code" autocomplete="off">
+            <button type="button" class="btn btn--small btn--ghost">Apply</button>
+          </div>
+
+          <dl class="totals">
+            <div><dt>Subtotal</dt><dd id="subtotal">$0.00</dd></div>
+            <div><dt>Discount</dt><dd>—</dd></div>
+            <div class="grand"><dt>Total</dt><dd id="total">$0.00</dd></div>
+          </dl>
+
+          <a class="btn btn--primary" href="#checkout">Go to checkout</a>
+        </section>
+      </aside>
+
+      <!-- ===== Checkout ===== -->
+      <section class="panel" id="checkout" aria-labelledby="checkout-title">
+        <h2 class="panel__title" id="checkout-title">Checkout</h2>
+        <p class="panel__sub">Fields marked <span class="req">*</span> are required.</p>
+
+        <form id="checkout-form" novalidate>
+          <fieldset>
+            <legend>Pickup point <span class="req">*</span></legend>
+            <p class="hint">Live location is posted in our Telegram channel <a href="https://t.me/dingontu">@dingontu</a>.</p>
+            <div class="halls" id="halls"></div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Your details</legend>
+            <p class="hint">Ordered before? Just enter your phone number or Telegram handle and we'll fill in the rest.</p>
+
+            <div class="field">
+              <label for="who">Phone number or Telegram handle <span class="req">*</span></label>
+              <div class="lookup">
+                <input id="who" name="who" placeholder="91234567 or @yourhandle" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="who-error">
+                <button type="button" class="btn btn--small btn--ghost" id="who-go">Continue</button>
+              </div>
+              <p class="field-error" id="who-error" role="alert" hidden></p>
+            </div>
+
+            <!-- Returning customer. Deliberately shows none of their saved
+                 details: anyone can type anyone's handle into this box. -->
+            <div class="found" id="found" role="status" hidden>
+              <span class="found__tick" aria-hidden="true">✓</span>
+              <div>
+                <strong>Welcome back!</strong>
+                We'll use the name and number from your last order.
+                <div class="found__actions">
+                  <button type="button" class="link-btn" id="edit-details">Update my details</button>
+                  <button type="button" class="link-btn" id="not-me">Not you?</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- First-time customer (or a returning one updating details). -->
+            <div id="new-details" hidden>
+              <p class="first-time" id="first-time-msg">Looks like it's your first order. We just need a few details.</p>
+              <div class="fields">
+                <div class="field">
+                  <label for="name">Name <span class="req">*</span></label>
+                  <input id="name" name="name" autocomplete="name">
+                </div>
+                <div class="field">
+                  <label for="handle">Telegram handle <span class="req">*</span></label>
+                  <input id="handle" name="handle" placeholder="@yourhandle" autocomplete="off" autocapitalize="off" spellcheck="false">
+                </div>
+                <div class="field">
+                  <label for="phone">Contact number <span class="req">*</span></label>
+                  <input id="phone" name="phone" type="tel" inputmode="tel" placeholder="9123 4567" autocomplete="tel">
+                </div>
+              </div>
+            </div>
+
+            <div class="field notes-field">
+              <label for="notes">Special instructions</label>
+              <textarea id="notes" name="notes" rows="3" placeholder="No mayo, extra sauce, etc."></textarea>
+            </div>
+          </fieldset>
+
+          <div class="notice">
+            <p>We stay at each hall for about 5 to 15 minutes, depending on the crowd. If you miss your hall's collection time, you can travel to the stop we're at to collect your food.</p>
+            <p><b>Strictly no refunds will be given.</b></p>
+            <p>If you can't make it, text <b>@NTUDINGO</b> or our delivery staff (handle posted in the channel during delivery) to ask us to leave your food at the designated collection point.</p>
+            <p><b>We do not take responsibility for missing or stolen food.</b></p>
+          </div>
+
+          <label class="agree">
+            <input type="checkbox" id="agree" required>
+            <span>I've read the collection and refund policy above.</span>
+          </label>
+
+          <div class="place">
+            <div class="place__total">Order total<strong id="place-total">$0.00</strong></div>
+            <button type="submit" class="btn btn--primary">Place order</button>
+          </div>
+          <p class="form-msg" id="form-msg" role="status" hidden></p>
+        </form>
+      </section>
+  </div>
 </main>
 
-<footer>
+<a class="cartbar" id="cartbar" href="#cart" hidden>
+  <span><span class="cartbar__count" id="cartbar-count">0</span>View order</span>
+  <span id="cartbar-total">$0.00</span>
+</a>
+
+<footer class="site-footer">
   <span class="blob blob--red-br" aria-hidden="true"></span>
   <div class="wrap">
     <p class="footer-cta">Join our Telegram channel<br>for live updates</p>
-    <!-- CHANGE ME: your Telegram channel -->
     <a class="handle" href="https://t.me/dingontu">@dingontu</a>
     <p class="fine">Dingo NTU · Supper truck delivery around NTU halls</p>
+    <p class="fine credits">Sample food photos from Wikimedia Commons — see <a href="/images/menu/CREDITS.txt">credits</a>.</p>
   </div>
 </footer>
 
+<script>
+/*
+ * UI-only for now: the menu, halls and cart live in the browser.
+ * Nothing is sent anywhere yet. Swap MENU / HALLS for data from the
+ * backend (menu_items table) and wire the form submit when ready.
+ */
+const CATEGORIES = ['Bowls', 'Noodles', 'Sides'];
+
+const MENU = [
+  { id: 'kani-mayo-bowl', category: 'Bowls', name: 'Kani Mayo Rice Bowl', price: 680,
+    desc: 'Soft shredded kani, fluffy scrambled egg, seaweed flakes, mayonnaise drizzle',
+    img: '/images/menu/kani-mayo-bowl.jpg' },
+  { id: 'spam-mayo-bowl', category: 'Bowls', name: 'Spam Mayo Rice Bowl', price: 640,
+    desc: 'Pan-fried spam, fluffy scrambled egg, seaweed flakes and mayonnaise',
+    img: '/images/menu/spam-mayo-bowl.jpg' },
+  { id: 'sesame-noodles', category: 'Noodles', name: 'Sesame Noodles', price: 720, limited: true,
+    desc: 'Pan-fried spam, soft scrambled egg, sesame-oil noodles and sesame seeds',
+    img: '/images/menu/sesame-noodles.jpg' },
+  { id: 'kimbap', category: 'Sides', name: 'Kimbap', price: 800, limited: true,
+    desc: 'Egg, carrot, spinach, cucumber, radish, Korean spam, crabstick, mayonnaise drizzle',
+    img: '/images/menu/kimbap.jpg' },
+  { id: 'gyoza', category: 'Sides', name: 'Pan-Fried Gyozas (10pcs)', price: 720,
+    desc: 'Comes with vinegar sauce',
+    img: '/images/menu/gyoza.jpg' },
+  { id: 'mantou', category: 'Sides', name: 'Golden Crispy Mantou (6pcs)', price: 460,
+    desc: 'Comes with condensed milk',
+    img: '/images/menu/mantou.jpg' },
+  { id: 'spam-musubi', category: 'Sides', name: 'Spam & Egg Musubi', price: 380,
+    desc: 'Pan-fried spam and egg wrapped in rice and seaweed',
+    img: '/images/menu/spam-musubi.jpg' },
+];
+
+const HALLS = [
+  'North Hill Carpark', 'Hall 9 Drop Off', 'Hall 11 Drop Off', 'Tamarind/Saraca Drop Off',
+  'Hall 14 Drop Off', 'Hall 12 Amphitheatre', 'Hall 3/16 Admin Office', 'Canteen 2 Walkway',
+  'Hall 6 Drop Off', 'Hall 5 Drop Off', 'Old Hall 7 Drop Off',
+];
+
+const cart = new Map(); // id -> qty
+const byId = Object.fromEntries(MENU.map(d => [d.id, d]));
+const money = cents => '$' + (cents / 100).toFixed(2);
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function stepperHTML(id, qty, name) {
+  return `<span class="stepper">
+    <button type="button" data-action="dec" data-id="${id}" aria-label="Remove one ${esc(name)}">−</button>
+    <output aria-label="Quantity">${qty}</output>
+    <button type="button" data-action="inc" data-id="${id}" aria-label="Add one more ${esc(name)}">+</button>
+  </span>`;
+}
+
+function dishControl(d) {
+  const qty = cart.get(d.id) || 0;
+  return qty
+    ? stepperHTML(d.id, qty, d.name)
+    : `<button type="button" class="add" data-action="inc" data-id="${d.id}" aria-label="Add ${esc(d.name)}">Add <span aria-hidden="true">+</span></button>`;
+}
+
+function renderMenu() {
+  $('chips').innerHTML = ['All', ...CATEGORIES].map((c, i) =>
+    `<button type="button" class="chip" data-cat="${c}" aria-pressed="${i === 0}">${c}</button>`).join('');
+
+  $('menu-list').innerHTML = CATEGORIES.map(cat => {
+    const dishes = MENU.filter(d => d.category === cat);
+    return `<div class="cat" data-cat="${cat}">
+      <div class="cat__head"><h3>${cat}</h3><span class="cat__count">${dishes.length} item${dishes.length === 1 ? '' : 's'}</span></div>
+      <div class="dishes">${dishes.map(d => `
+        <article class="dish" data-dish="${d.id}" data-search="${esc((d.name + ' ' + d.desc).toLowerCase())}">
+          <div class="dish__img">
+            <img src="${d.img}" alt="${esc(d.name)}" loading="lazy" width="640" height="480">
+            ${d.limited ? '<span class="badge">Limited</span>' : ''}
+          </div>
+          <div class="dish__body">
+            <h4 class="dish__name">${esc(d.name)}</h4>
+            <p class="dish__desc">${esc(d.desc)}</p>
+            <div class="dish__foot">
+              <span class="price">${money(d.price)}<small>SGD</small></span>
+              <span class="dish__ctl">${dishControl(d)}</span>
+            </div>
+          </div>
+        </article>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  $('halls').innerHTML = HALLS.map((h, i) => `
+    <label class="hall">
+      <input type="radio" name="hall" value="${esc(h)}" required>
+      <span><b>${i + 1}</b>${esc(h)}</span>
+    </label>`).join('');
+}
+
+function renderCart() {
+  let count = 0, subtotal = 0;
+  const rows = [];
+  for (const [id, qty] of cart) {
+    const d = byId[id];
+    count += qty;
+    subtotal += d.price * qty;
+    rows.push(`<li class="cart__item">
+      <img class="cart__thumb" src="${d.img}" alt="">
+      <span class="cart__name">${esc(d.name)}</span>
+      <span class="cart__line">${money(d.price * qty)}</span>
+      <div class="cart__controls">
+        ${stepperHTML(id, qty, d.name)}
+        <button type="button" class="link-btn" data-action="remove" data-id="${id}">Remove</button>
+      </div>
+    </li>`);
+  }
+  $('cart-list').innerHTML = rows.join('');
+  $('cart-empty').hidden = count > 0;
+  $('cart-count').textContent = `${count} item${count === 1 ? '' : 's'}`;
+  $('subtotal').textContent = $('total').textContent = $('place-total').textContent = money(subtotal);
+
+  cartCount = count;
+  syncCartbar();
+  $('cartbar-count').textContent = count;
+  $('cartbar-total').textContent = money(subtotal);
+
+  for (const d of MENU) {
+    const card = document.querySelector(`[data-dish="${d.id}"]`);
+    card.classList.toggle('in-cart', cart.has(d.id));
+    card.querySelector('.dish__ctl').innerHTML = dishControl(d);
+  }
+}
+
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  const { action, id } = btn.dataset;
+  const qty = cart.get(id) || 0;
+  if (action === 'inc') cart.set(id, Math.min(qty + 1, 20));
+  if (action === 'dec') qty > 1 ? cart.set(id, qty - 1) : cart.delete(id);
+  if (action === 'remove') cart.delete(id);
+
+  // Keep keyboard focus on the same control after the re-render.
+  const sel = `[data-action="${action}"][data-id="${id}"]`;
+  const inCard = !!btn.closest('.dish');
+  renderCart();
+  const scope = inCard ? document.querySelector(`[data-dish="${id}"]`) : $('cart-list');
+  (scope?.querySelector(sel) || scope?.querySelector(`[data-id="${id}"]`))?.focus();
+});
+
+let activeCat = 'All';
+function applyFilters() {
+  const q = $('search').value.trim().toLowerCase();
+  let shown = 0;
+  document.querySelectorAll('.cat').forEach(cat => {
+    const catOk = activeCat === 'All' || cat.dataset.cat === activeCat;
+    let any = false;
+    cat.querySelectorAll('.dish').forEach(card => {
+      const ok = catOk && (!q || card.dataset.search.includes(q));
+      card.hidden = !ok;
+      if (ok) { any = true; shown++; }
+    });
+    cat.hidden = !any;
+  });
+  $('no-results').hidden = shown > 0;
+}
+
+$('search').addEventListener('input', applyFilters);
+$('chips').addEventListener('click', e => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  activeCat = chip.dataset.cat;
+  document.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', c === chip));
+  applyFilters();
+});
+
+// ---- "Phone number or Telegram handle" lookup ----------------------------
+
+/** Works out which of the two the customer typed, or null if neither. */
+function parseWho(raw) {
+  const s = raw.trim();
+  let digits = s.replace(/[\s()-]/g, '');
+  if (/^\+?65\d{8}$/.test(digits)) digits = digits.slice(-8); // drop +65
+  if (/^[3689]\d{7}$/.test(digits)) return { kind: 'phone', value: digits };
+  const handle = s.replace(/^@/, '');
+  if (/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(handle)) return { kind: 'handle', value: handle };
+  return null;
+}
+
+/*
+ * TODO(backend): replace with a request to the server. The server should only
+ * answer "found or not" and attach the saved name/number to the order itself.
+ * It must never send a customer's name or phone number back to the browser,
+ * because anyone can type anyone's handle into this box.
+ *
+ * DEMO ONLY so both states can be previewed: @dingotest and 91234567 count as
+ * returning customers, everything else as a first-time customer.
+ */
+async function lookupCustomer({ kind, value }) {
+  await new Promise(r => setTimeout(r, 350));
+  const demo = kind === 'handle' ? value.toLowerCase() === 'dingotest' : value === '91234567';
+  return { found: demo };
+}
+
+const who = $('who'), whoGo = $('who-go'), whoError = $('who-error');
+let lastWho = null;
+
+function showDetails(state, parsed) {
+  $('found').hidden = state !== 'found';
+  $('new-details').hidden = state !== 'new' && state !== 'edit';
+  if (state === 'new' || state === 'edit') {
+    $('first-time-msg').textContent = state === 'new'
+      ? "Looks like it's your first order. We just need a few details."
+      : 'Enter the details we should use from now on.';
+    // Carry over what they typed into the right box. Values we filled in
+    // earlier (and they haven't touched) are replaced; their own typing isn't.
+    for (const kind of ['phone', 'handle']) {
+      const box = $(kind);
+      if (box.value === autoFilled[kind]) box.value = '';
+      if (parsed?.kind === kind && !box.value) {
+        box.value = autoFilled[kind] = kind === 'handle' ? '@' + parsed.value : parsed.value;
+      }
+    }
+  }
+}
+const autoFilled = { phone: null, handle: null };
+
+async function checkWho() {
+  const parsed = parseWho(who.value);
+  whoError.hidden = !!parsed;
+  if (!parsed) {
+    whoError.textContent = 'Enter an 8-digit phone number (e.g. 91234567) or a Telegram handle (e.g. @yourhandle).';
+    showDetails(null);
+    who.focus();
+    return;
+  }
+  whoGo.disabled = true;
+  whoGo.textContent = 'Checking…';
+  try {
+    const { found } = await lookupCustomer(parsed);
+    lastWho = who.value;
+    showDetails(found ? 'found' : 'new', parsed);
+    if (!found) $('name').focus();
+  } finally {
+    whoGo.disabled = false;
+    whoGo.textContent = 'Continue';
+  }
+}
+
+whoGo.addEventListener('click', checkWho);
+who.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); checkWho(); }
+});
+// Typing a different phone/handle after a result means the result no longer applies.
+who.addEventListener('input', () => {
+  whoError.hidden = true;
+  if (lastWho !== null && who.value !== lastWho) { lastWho = null; showDetails(null); }
+});
+$('edit-details').addEventListener('click', () => {
+  showDetails('edit', parseWho(who.value));
+  $('name').focus();
+});
+$('not-me').addEventListener('click', () => {
+  who.value = '';
+  lastWho = null;
+  showDetails(null);
+  who.focus();
+});
+
+// Not wired to the backend yet — just tell the user so.
+$('checkout-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const msg = $('form-msg');
+  msg.hidden = false;
+  msg.innerHTML = 'Online checkout isn\'t live yet. For now, please order through our <a href="https://t.me/Dingo_post_form_bot?start=order">Telegram bot</a>.';
+});
+
+// Phone "View order" bar: only while there's something in the cart and the
+// cart / checkout aren't already on screen.
+let cartCount = 0;
+const onScreen = new Set();
+function syncCartbar() {
+  const show = cartCount > 0 && onScreen.size === 0;
+  $('cartbar').hidden = !show;
+  document.body.classList.toggle('has-cartbar', cartCount > 0);
+}
+if ('IntersectionObserver' in window) {
+  const io = new IntersectionObserver(entries => {
+    for (const en of entries) en.isIntersecting ? onScreen.add(en.target) : onScreen.delete(en.target);
+    syncCartbar();
+  });
+  io.observe($('cart'));
+  io.observe($('checkout'));
+}
+
+renderMenu();
+renderCart();
+</script>
 </body>
 </html>
