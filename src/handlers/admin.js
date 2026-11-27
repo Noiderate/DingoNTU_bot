@@ -823,7 +823,7 @@ async function handleSpamOrdersCallback(bot, chatId, userId, data, answer) {
 }
 
 /**
- * Settings > Dingo Channel: send posts to the real channel or the test one.
+ * Settings > Change Dingo Channel: send posts to the real channel or the fake (test) one.
  *
  * Refused while a round is running: its posts are tracked by message id only,
  * so after a switch the later posts, edits and Finish Delivery's clean-up
@@ -874,7 +874,7 @@ async function handleChannelTargetCallback(bot, query, chatId, userId, data, ans
   await channelTarget.setMode(wanted, userId);
   log('info', 'channel_target_changed', { mode: wanted, by: userId });
   await showMenu();
-  await answer(wanted === channelTarget.MODES.TEST ? 'Posting to the test channel.' : 'Posting to the real Dingo channel.');
+  await answer(wanted === channelTarget.MODES.TEST ? 'Now posting to the FAKE test channel.' : 'Now posting to the REAL Dingo channel.');
   return true;
 }
 

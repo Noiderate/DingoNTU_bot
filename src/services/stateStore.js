@@ -71,7 +71,7 @@ const KEYS = {
   // either may be null). Set under Settings > Edit Dingo Post; no expiry.
   preorderCustom: () => 'settings:preorder_custom',
   // Which channel Dingo posts go to ({ mode: 'live' | 'test', changedAt,
-  // changedBy }). Set under Settings > Dingo Channel; absent means live.
+  // changedBy }). Set under Settings > Change Dingo Channel; absent means live.
   channelTarget: () => 'settings:channel_target',
   // Highest message id seen per chat, for admin-menu positioning.
   latestChatMessage: chatId => `chat:latest_msg:${chatId}`,

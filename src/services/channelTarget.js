@@ -4,8 +4,8 @@ const { log } = require('../utils/logger');
 
 /**
  * Which channel the Dingo posts go to: the real one (DINGO_CHANNEL_ID) or a
- * private test one (TEST_DINGO_CHANNEL_ID). Switched under Settings > Dingo
- * Channel and stored in bot_state, so it applies across every instance.
+ * private test one (TEST_DINGO_CHANNEL_ID). Switched under Settings > Change
+ * Dingo Channel, where they are labelled REAL and FAKE, and stored in bot_state, so it applies across every instance.
  *
  * Anything other than an explicit, usable "test" choice means the real
  * channel - including a failed read, so a Supabase hiccup never silently
