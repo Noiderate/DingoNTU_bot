@@ -344,6 +344,20 @@ function preorderPostText(custom) {
     + 'Changes apply to a live preorder post straight away.';
 }
 
+/** Settings > Dingo Channel: where the posts currently go. */
+function channelTargetText(mode, testConfigured) {
+  const current = mode === 'test' ? '🧪 Test channel' : '📢 Real Dingo channel';
+  const note = testConfigured
+    ? 'Switch to the test channel for trial runs; customers in the real channel see nothing.'
+    : 'No test channel is set up. Add TEST_DINGO_CHANNEL_ID in the Vercel environment variables '
+      + 'and redeploy to enable it.';
+
+  return '📡 Dingo Channel\n\n'
+    + `Posts currently go to: ${current}\n\n`
+    + `${note}\n\n`
+    + 'You can only switch while no round is running - Finish Delivery first.';
+}
+
 function preorderEditTextPromptText(maxLength) {
   return '✏️ Send the new first line for the preorder post.\n\n'
     + 'Write {hall} where the hall name should go, e.g.\n'
@@ -393,6 +407,7 @@ module.exports = {
   deleteHallSelectText,
   deliveryModeText,
   preorderPostText,
+  channelTargetText,
   preorderEditTextPromptText,
   preorderAttachPhotoPromptText,
 };

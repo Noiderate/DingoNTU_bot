@@ -24,6 +24,11 @@ You need all of these separate from production:
 Add your own Telegram ID to the test sheet's `Settings` column A so you are an
 admin, and add a second account if you can — several checks need two people.
 
+On the production bot itself, posts can also be sent to a private channel set
+as `TEST_DINGO_CHANNEL_ID`: switch under Settings > 📡 Dingo Channel (only
+while no round is running). Orders, stock and payments are still real there —
+only the channel posts move.
+
 ```bash
 npm test                        # must be green before starting
 curl https://<preview>/api/health

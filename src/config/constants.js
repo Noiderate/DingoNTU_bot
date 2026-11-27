@@ -47,6 +47,11 @@ const CALLBACKS = {
   SPAM_ORDERS_LARGE: 'spam_orders_large',
   SPAM_ORDERS_DELETE: 'spam_orders_delete',
 
+  // Dingo channel target: real channel or test channel
+  SETTINGS_CHANNEL_TARGET: 'settings_channel_target',
+  CHANNEL_TARGET_LIVE: 'channel_target_live',
+  CHANNEL_TARGET_TEST: 'channel_target_test',
+
   // Halls
   SETTINGS_MANAGE_HALLS: 'settings_manage_halls',
   HALL_ADD: 'hall_add',

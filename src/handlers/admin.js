@@ -16,6 +16,7 @@ const orderActions = require('../services/orderActions');
 const repo = require('../services/orderRepository');
 const stateStore = require('../services/stateStore');
 const orderWindow = require('../services/orderWindow');
+const channelTarget = require('../services/channelTarget');
 const botPause = require('../services/botPause');
 const todaySheet = require('../services/todaySheet');
 const { DateTime } = require('luxon');
@@ -619,7 +620,7 @@ function findNewlySoldOutItems(changes) {
 async function announceSoldOut(bot, soldOutItems) {
   await statsService.recordSoldOut(soldOutItems);
 
-  const channelId = config.telegram.dingoChannelId;
+  const channelId = await channelTarget.getActiveChannelId();
 
   if (!channelId) {
     return;
@@ -819,6 +820,62 @@ async function handleSpamOrdersCallback(bot, chatId, userId, data, answer) {
   }
 
   return false;
+}
+
+/**
+ * Settings > Dingo Channel: send posts to the real channel or the test one.
+ *
+ * Refused while a round is running: its posts are tracked by message id only,
+ * so after a switch the later posts, edits and Finish Delivery's clean-up
+ * would land in a different channel from the earlier ones.
+ */
+async function handleChannelTargetCallback(bot, query, chatId, userId, data, answer) {
+  const isOpen = data === CALLBACKS.SETTINGS_CHANNEL_TARGET;
+  const wanted = data === CALLBACKS.CHANNEL_TARGET_TEST ? channelTarget.MODES.TEST
+    : data === CALLBACKS.CHANNEL_TARGET_LIVE ? channelTarget.MODES.LIVE
+      : null;
+
+  if (!isOpen && !wanted) {
+    return false;
+  }
+
+  const showMenu = async () => {
+    const mode = await channelTarget.getMode();
+    const testConfigured = channelTarget.isTestChannelConfigured();
+    await updateMenuMessage(
+      bot, chatId, userId,
+      menuTexts.channelTargetText(mode, testConfigured),
+      keyboards.channelTargetKeyboard(mode, testConfigured)
+    );
+  };
+
+  if (isOpen) {
+    await showMenu();
+    await answer();
+    return true;
+  }
+
+  if (wanted === await channelTarget.getMode()) {
+    await answer('Already selected.');
+    return true;
+  }
+
+  if (wanted === channelTarget.MODES.TEST && !channelTarget.isTestChannelConfigured()) {
+    await answer('TEST_DINGO_CHANNEL_ID is not set in the environment.', { show_alert: true });
+    return true;
+  }
+
+  const [post, window] = await Promise.all([getPreorderPost(), orderWindow.getWindow()]);
+  if ((post && post.msgId) || window) {
+    await answer('A round is running. Tap Finish Delivery first, then switch channel.', { show_alert: true });
+    return true;
+  }
+
+  await channelTarget.setMode(wanted, userId);
+  log('info', 'channel_target_changed', { mode: wanted, by: userId });
+  await showMenu();
+  await answer(wanted === channelTarget.MODES.TEST ? 'Posting to the test channel.' : 'Posting to the real Dingo channel.');
+  return true;
 }
 
 async function handlePreorderPostCallback(bot, query, chatId, userId, data, answer) {
@@ -2349,6 +2406,10 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
     return true;
   }
 
+  if (await handleChannelTargetCallback(bot, query, chatId, userId, data, answer)) {
+    return true;
+  }
+
   if (data === CALLBACKS.SETTINGS_MANAGE_HALLS) {
     await updateMenuMessage(
       bot, chatId, userId,
@@ -2617,7 +2678,7 @@ async function postDingoUpdate(bot, { hallId, postMode, notifyChatId = null, onP
       return { posted: false, reason: 'stale' };
     }
 
-    const channelId = config.telegram.dingoChannelId;
+    const channelId = await channelTarget.getActiveChannelId();
 
     if (!channelId) {
       return { posted: false, reason: 'no_channel' };
@@ -2873,7 +2934,7 @@ async function postStageOne(bot, { notifyChatId = null } = {}) {
   }
 
   try {
-    const channelId = config.telegram.dingoChannelId;
+    const channelId = await channelTarget.getActiveChannelId();
 
     if (!channelId) {
       return { posted: false, reason: 'no_channel' };
@@ -4529,7 +4590,9 @@ async function handlePauseCallback(bot, query, chatId, userId, data, answer) {
 async function handleFinishDelivery(bot, query, chatId, userId) {
   await bot.answerCallbackQuery(query.id);
 
-  const channelId = config.telegram.dingoChannelId;
+  // Switching channel is refused mid-round (see handleChannelTargetCallback),
+  // so this round's posts are all in the currently active channel.
+  const channelId = await channelTarget.getActiveChannelId();
   const soldOutIds = await stateStore.get(stateStore.KEYS.soldOutPosts(), []);
   await stateStore.remove(stateStore.KEYS.soldOutPosts());
   const trackedIds = [...new Set([...await consumeTrackedDingoMessageIds(), ...(soldOutIds || [])])];

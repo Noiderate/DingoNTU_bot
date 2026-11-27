@@ -62,6 +62,7 @@ function settingsMenuKeyboard() {
       [{ text: '🍔 Manage Food Items', callback_data: CALLBACKS.SETTINGS_MANAGE_FOODS }],
       [{ text: '🏢 Manage Halls', callback_data: CALLBACKS.SETTINGS_MANAGE_HALLS }],
       [{ text: '📝 Edit Dingo Post', callback_data: CALLBACKS.SETTINGS_PREORDER_POST }],
+      [{ text: '📡 Dingo Channel', callback_data: CALLBACKS.SETTINGS_CHANNEL_TARGET }],
       [{ text: '⏰ Order Schedule', callback_data: CALLBACKS.SETTINGS_ORDER_SCHEDULE }],
       [{ text: '🧪 Spam Orders', callback_data: CALLBACKS.SETTINGS_SPAM_ORDERS }],
       [{ text: '← Back', callback_data: CALLBACKS.ADMIN_MENU_BACK }],
@@ -294,6 +295,22 @@ function preorderPostKeyboard(custom) {
   };
 }
 
+/**
+ * Settings > Dingo Channel. The active choice is ticked; the test button is
+ * left off when TEST_DINGO_CHANNEL_ID is not set.
+ */
+function channelTargetKeyboard(mode, testConfigured) {
+  const mark = active => (active ? '✅ ' : '');
+  const rows = [[{ text: `${mark(mode === 'live')}📢 Real Dingo Channel`, callback_data: CALLBACKS.CHANNEL_TARGET_LIVE }]];
+
+  if (testConfigured) {
+    rows.push([{ text: `${mark(mode === 'test')}🧪 Test Channel`, callback_data: CALLBACKS.CHANNEL_TARGET_TEST }]);
+  }
+
+  rows.push([{ text: '← Back', callback_data: CALLBACKS.ADMIN_SETTINGS }]);
+  return { inline_keyboard: rows };
+}
+
 /** Back out of an Edit Dingo Post prompt without changing anything. */
 function backToPreorderPostKeyboard() {
   return {
@@ -402,5 +419,6 @@ module.exports = {
   backToHallsKeyboard,
   deliveryModeKeyboard,
   preorderPostKeyboard,
+  channelTargetKeyboard,
   backToPreorderPostKeyboard,
 };

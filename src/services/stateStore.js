@@ -70,6 +70,9 @@ const KEYS = {
   // Admin-set first line and photo for the preorder post ({ text, photoFileId },
   // either may be null). Set under Settings > Edit Dingo Post; no expiry.
   preorderCustom: () => 'settings:preorder_custom',
+  // Which channel Dingo posts go to ({ mode: 'live' | 'test', changedAt,
+  // changedBy }). Set under Settings > Dingo Channel; absent means live.
+  channelTarget: () => 'settings:channel_target',
   // Highest message id seen per chat, for admin-menu positioning.
   latestChatMessage: chatId => `chat:latest_msg:${chatId}`,
   // What was last written to the FoodAndStock sheet mirror, { hash, rowCount },

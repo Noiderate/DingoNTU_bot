@@ -67,6 +67,9 @@ const config = {
     webhookSecret: readString('TELEGRAM_WEBHOOK_SECRET'),
     publicBaseUrl: readString('PUBLIC_BASE_URL').replace(/\/+$/, ''),
     dingoChannelId: readString('DINGO_CHANNEL_ID'),
+    // Optional private channel the posts can be switched to under
+    // Settings > Dingo Channel (see services/channelTarget.js).
+    testDingoChannelId: readString('TEST_DINGO_CHANNEL_ID'),
     paymentInstructionImage: readString('PAYMENT_INSTRUCTION_IMAGE'),
     paymentInstructionImageUrl: readString('PAYMENT_INSTRUCTION_IMAGE_URL'),
   },
