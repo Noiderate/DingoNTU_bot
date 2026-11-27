@@ -740,6 +740,15 @@ stage-1 window whose cutoff passed during the stop just stays closed.
 Customers are not re-notified. If the pause lifts on its own, the round stays
 closed and the post reads "Ordering is now closed".
 
+**Taking a break: Stop until I resume.** The Stop screen has two buttons:
+**🛑 Stop for today** (above) and **⏸️ Stop until I resume**. The second does
+all of the same things, but the pause has no end time (`until: null`, no
+expiry), so it lasts through any number of days and redeploys until someone
+taps Resume Bot. Customers and the channel post say "paused **for now**"
+instead of "for today", and the main menu shows "STOPPED until resumed (since
+27 Nov)". Resuming after it never brings back the old round: ordering stays
+closed until an admin taps Post: Orders Open.
+
 Stuck? The pause is the `bot:pause` row in `bot_state`; deleting it resumes
 the bot (the window stays `closed`). See `src/services/botPause.js`.
 
@@ -1077,6 +1086,16 @@ An honest list.
 ---
 
 ## 10. Change log
+
+**2026-11-27 — Stop Bot: "Stop until I resume" for breaks**
+
+- The Stop Bot screen now offers **🛑 Stop for today** (unchanged) or
+  **⏸️ Stop until I resume** (no end time; only Resume Bot lifts it).
+- An indefinite stop says "paused for now" to customers and in the channel
+  post, and doesn't tell customers "something has gone wrong".
+- Resuming after an indefinite stop leaves ordering closed (the old round is
+  stale); post a fresh Orders Open.
+- Delivery Mode's first button renamed "📣 Edit Stock & Post".
 
 **2026-11-27 — Date-only receipts without the order code; UOB "Submitted"**
 

@@ -115,7 +115,7 @@ A delivery night has two ordering stages (`src/services/orderWindow.js`):
    "order before 12:30 AM". At the cutoff the scheduled tick edits that post to
    "Ordering is now closed" and removes its button; customers are refused at the
    cutoff itself, even if the tick is late. Orders already confirmed can still pay.
-2. **Spare stock.** Once the drivers have left, **Confirm stock & post** (the first
+2. **Spare stock.** Once the drivers have left, **Edit Stock & Post** (the first
    button in Delivery Mode) opens a screen listing each item's total, sold in
    stage 1 and remaining stock. Tap an item to change its total (it can't be
    lower than what is already sold; the change is for tonight only), then

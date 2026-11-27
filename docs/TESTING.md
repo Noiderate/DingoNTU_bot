@@ -281,6 +281,12 @@ added), one with an unpaid order, one with a paid order.
 - [ ] Delivery-mode get ready / coming / here posts still work.
 - [ ] Tap ▶️ Resume Bot and confirm. Stage 1 (before its cutoff) reopens and
       the channel post gets its button back; all admins are told.
+- [ ] Stop again, this time with **⏸️ Stop until I resume**. The channel
+      post and customer replies say "paused for now"; the main menu says
+      "STOPPED until resumed (since …)". After 3pm the next day it is still
+      stopped and no "post orders" reminders arrive.
+- [ ] Resume. Ordering stays closed (post reads closed); Post: Orders Open
+      works normally.
 
 ## 8. Delivery mode
 

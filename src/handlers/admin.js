@@ -929,7 +929,10 @@ async function handleAdminPreorderPhoto(bot, msg) {
 }
 
 function pausedStatusLine(pause) {
-  return `⏸️ Bot is STOPPED until ${botPause.formatUntil(pause)}`
+  const span = botPause.isIndefinite(pause)
+    ? `until resumed (since ${botPause.formatSince(pause)})`
+    : `until ${botPause.formatUntil(pause)}`;
+  return `⏸️ Bot is STOPPED ${span}`
     + `${pause.pausedBy ? ` (by ${pause.pausedBy})` : ''}. `
     + `Customers are told to message ${botPause.contactLabel(pause)}.`;
 }
@@ -2075,7 +2078,7 @@ async function handleMenuCallback(bot, query, chatId, userId, messageId, data) {
   }
 
   if (data === CALLBACKS.ADMIN_PAUSE || data === CALLBACKS.ADMIN_PAUSE_CONFIRM
-    || data === CALLBACKS.ADMIN_RESUME || data === CALLBACKS.ADMIN_RESUME_CONFIRM) {
+    || data === CALLBACKS.ADMIN_PAUSE_INDEFINITE_CONFIRM || data === CALLBACKS.ADMIN_RESUME || data === CALLBACKS.ADMIN_RESUME_CONFIRM) {
     return handlePauseCallback(bot, query, chatId, userId, data, answer);
   }
 
@@ -2966,7 +2969,7 @@ async function runOrderReminders(bot, now = orderWindow.nowSgt()) {
     botPause.isPaused(),
   ]);
 
-  // Stopped for the day: don't nag anyone to open ordering.
+  // Stopped (for the day or until resumed): don't nag anyone to open ordering.
   if (paused) {
     return null;
   }
@@ -3195,7 +3198,7 @@ async function renderStagePanel(bot, chatId, userId) {
 }
 
 /**
- * The Delivery Mode "Confirm stock & post" button (and /skip at that stage):
+ * The Delivery Mode "Edit Stock & Post" button (and /skip at that stage):
  * show the stock screen instead of posting straight away.
  *
  * If stage 1 was never posted this round, nothing has reset last round yet, so
@@ -4275,6 +4278,10 @@ async function resolvePauseContact(bot, actor) {
  */
 async function notifyCustomersOfPause(bot, pause, activeOrders) {
   const contact = botPause.contactLabel(pause);
+  // A planned break isn't "something has gone wrong".
+  const opener = botPause.isIndefinite(pause)
+    ? '⚠️ Sorry - ordering through the bot is paused for now.'
+    : '⚠️ Sorry - something has gone wrong, so ordering through the bot is paused for today.';
   let cartsCleared = 0;
   let ordersNotified = 0;
 
@@ -4295,8 +4302,7 @@ async function notifyCustomersOfPause(bot, pause, activeOrders) {
     await orderActions.notify(
       bot,
       telegramUserId,
-      '⚠️ Sorry - something has gone wrong, so ordering through the bot is paused for today. '
-      + `Your cart has been cleared.\n\nPlease message ${contact} to order.`
+      `${opener} Your cart has been cleared.\n\nPlease message ${contact} to order.`
     );
   }
 
@@ -4312,8 +4318,7 @@ async function notifyCustomersOfPause(bot, pause, activeOrders) {
     await orderActions.notify(
       bot,
       chatId,
-      '⚠️ Sorry - something has gone wrong, so the bot is paused for today. '
-      + `Your order ${codes.join(', ')} is still saved.\n\nPlease message ${contact} about it.`
+      `${opener} Your order ${codes.join(', ')} is still saved.\n\nPlease message ${contact} about it.`
     );
     ordersNotified += 1;
   }
@@ -4322,10 +4327,11 @@ async function notifyCustomersOfPause(bot, pause, activeOrders) {
 }
 
 /**
- * Stop the bot for the rest of the service day. Returns { paused: true, ... }
- * or { paused: false, reason } ('locked' | 'already_paused').
+ * Stop the bot for the rest of the service day, or with { indefinite: true }
+ * until an admin taps Resume Bot. Returns { paused: true, ... } or
+ * { paused: false, reason } ('locked' | 'already_paused').
  */
-async function pauseBot(bot, actor) {
+async function pauseBot(bot, actor, { indefinite = false } = {}) {
   const holder = await stateStore.acquireLock(stateStore.LOCKS.botPause(), { leaseMs: 120000 });
 
   if (!holder) {
@@ -4343,6 +4349,7 @@ async function pauseBot(bot, actor) {
       pausedById: actor ? actor.id : null,
       contact: await resolvePauseContact(bot, actor),
       previousWindow: window,
+      indefinite,
     });
 
     // Close the round too, so ordering can't quietly reopen when the pause
@@ -4379,7 +4386,8 @@ async function pauseBot(bot, actor) {
 
     await sendToAllAdmins(
       bot,
-      `🛑 Bot STOPPED by ${pause.pausedBy || 'an admin'} until ${botPause.formatUntil(pause)}.\n`
+      `🛑 Bot STOPPED by ${pause.pausedBy || 'an admin'} `
+      + `${botPause.isIndefinite(pause) ? 'until someone taps Resume Bot' : `until ${botPause.formatUntil(pause)}`}.\n`
       + `• Customers are told to message ${botPause.contactLabel(pause)}.\n`
       + `• ${notified.cartsCleared} open cart(s) cleared, ${notified.ordersNotified} customer(s) mid-payment told their order is saved.\n`
       + '• Orders already placed are untouched. Tap ▶️ Resume Bot in the main menu to undo.\n\n'
@@ -4420,7 +4428,9 @@ async function resumeBot(bot, actor) {
       && current.stage === orderWindow.STAGES.CLOSED
       && current.postedAt === previous.postedAt;
 
-    if (untouched && previous.stage !== orderWindow.STAGES.CLOSED) {
+    // After "Stop until I resume" (a break of days or weeks) the old round is
+    // stale - ordering stays closed until an admin posts a fresh one.
+    if (untouched && previous.stage !== orderWindow.STAGES.CLOSED && !botPause.isIndefinite(pause)) {
       await orderWindow.setWindow(previous);
     }
 
@@ -4456,22 +4466,23 @@ async function handlePauseCallback(bot, query, chatId, userId, data, answer) {
 
     await updateMenuMessage(
       bot, chatId, userId,
-      '🛑 Stop the bot for today?\n\n'
-      + `Until ${botPause.pauseEndsAt().toFormat('h:mm a ccc')} (the end of this service day):\n`
+      '🛑 Stop the bot?\n\n'
       + '• Nobody can order. Customers are told to message the tagged admin.\n'
       + '• The channel post changes to "please message @admin to order" and loses its button.\n'
       + '• Open carts are cleared, and customers mid-payment are told their order is saved.\n'
       + '• Every admin is sent the orders still to deliver, in hall order.\n\n'
-      + 'Orders already placed are NOT cancelled. You can undo this with Resume Bot.',
-      keyboards.pauseConfirmKeyboard(CALLBACKS.ADMIN_PAUSE_CONFIRM, '🛑 Yes, stop the bot')
+      + `🛑 Stop for today - lifts by itself at ${botPause.pauseEndsAt().toFormat('h:mm a ccc')} (end of this service day).\n`
+      + '⏸️ Stop until I resume - for a break. Stays stopped (no reminders either) until someone taps Resume Bot.\n\n'
+      + 'Orders already placed are NOT cancelled. You can undo either with Resume Bot.',
+      keyboards.stopBotKeyboard()
     );
     await answer();
     return true;
   }
 
-  if (data === CALLBACKS.ADMIN_PAUSE_CONFIRM) {
+  if (data === CALLBACKS.ADMIN_PAUSE_CONFIRM || data === CALLBACKS.ADMIN_PAUSE_INDEFINITE_CONFIRM) {
     await answer('Stopping the bot...');
-    const result = await pauseBot(bot, query.from);
+    const result = await pauseBot(bot, query.from, { indefinite: data === CALLBACKS.ADMIN_PAUSE_INDEFINITE_CONFIRM });
 
     if (!result.paused && result.reason === 'locked') {
       await bot.sendMessage(chatId, '⏳ Another admin is stopping or resuming the bot right now - check the main menu in a moment.');
@@ -4488,11 +4499,15 @@ async function handlePauseCallback(bot, query, chatId, userId, data, answer) {
       return true;
     }
 
+    const pause = await botPause.getPause();
     await updateMenuMessage(
       bot, chatId, userId,
       '▶️ Resume the bot?\n\n'
-      + 'Ordering goes back to how it was before the stop (if the cutoff has passed, it stays closed), '
-      + 'and the channel post gets its order button back. Customers who were told to message an admin are not re-notified.',
+      + (botPause.isIndefinite(pause)
+        ? 'Ordering stays closed until you tap 📣 Post: Orders Open, and the reminders start again. '
+        : 'Ordering goes back to how it was before the stop (if the cutoff has passed, it stays closed), '
+          + 'and the channel post gets its order button back. ')
+      + 'Customers who were told to message an admin are not re-notified.',
       keyboards.pauseConfirmKeyboard(CALLBACKS.ADMIN_RESUME_CONFIRM, '▶️ Yes, resume')
     );
     await answer();

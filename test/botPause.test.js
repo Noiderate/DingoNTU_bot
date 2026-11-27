@@ -249,6 +249,83 @@ test('Resume Bot puts the night back how it was before the stop', async t => {
   assert.match(sent.find(m => m.chatId === 900).text, /resumed by @boss[\s\S]*open again/);
 });
 
+// --- Stop until I resume ----------------------------------------------------------
+
+test('an indefinite pause has no end time and no expiry', async t => {
+  const writes = [];
+  t.mock.method(stateStore, 'set', async (key, value, options) => { writes.push({ key, value, options }); });
+
+  const pause = await botPause.startPause({ pausedBy: '@boss', indefinite: true }, at('2026-11-27T21:00'));
+
+  assert.equal(pause.until, null);
+  assert.equal(writes[0].options.ttlMs, null);
+  assert.equal(botPause.isIndefinite(pause), true);
+  assert.equal(botPause.formatSince(pause), '27 Nov');
+  assert.equal(botPause.isIndefinite(activePause()), false);
+});
+
+test('an indefinite pause says "for now", not "for today"', () => {
+  const pause = activePause({ until: null });
+  assert.match(botPause.customerPausedText(pause), /paused for now/);
+  assert.match(botPause.channelPausedText(pause), /paused for now/);
+  assert.doesNotMatch(botPause.channelPausedText(pause), /today/);
+});
+
+test('the Stop keyboard has for today, until I resume, and cancel', () => {
+  const { stopBotKeyboard } = require('../src/utils/keyboards');
+  const callbacks = stopBotKeyboard().inline_keyboard.flat().map(b => b.callback_data);
+  assert.deepEqual(callbacks, [CALLBACKS.ADMIN_PAUSE_CONFIRM, CALLBACKS.ADMIN_PAUSE_INDEFINITE_CONFIRM, CALLBACKS.ADMIN_MENU_BACK]);
+});
+
+test('Stop until I resume: no expiry, admins told it waits for Resume, customers not told "something went wrong"', async t => {
+  const stage2 = { stage: orderWindow.STAGES.STAGE2, postedAt: '2026-11-26T10:00:00.000Z', cutoffAt: null };
+  const data = mockStore(t, { [WINDOW]: stage2 });
+  mockPauseDependencies(t, { carts: [41] });
+
+  const sent = [];
+  const bot = { async sendMessage(chatId, text) { sent.push({ chatId, text }); return { message_id: 1 }; } };
+
+  const result = await admin.pauseBot(bot, { id: 1, username: 'boss' }, { indefinite: true });
+
+  assert.equal(result.paused, true);
+  assert.equal(data[PAUSE].until, null);
+  assert.equal(data[WINDOW].stage, orderWindow.STAGES.CLOSED);
+
+  const toCustomer = sent.find(m => m.chatId === 41).text;
+  assert.match(toCustomer, /paused for now/);
+  assert.doesNotMatch(toCustomer, /gone wrong/);
+
+  const toAdmin = sent.filter(m => m.chatId === 900).map(m => m.text).join('\n');
+  assert.match(toAdmin, /STOPPED by @boss until someone taps Resume Bot/);
+});
+
+test('Resume after "until I resume" keeps ordering closed instead of reopening the old round', async t => {
+  const stage2 = { stage: orderWindow.STAGES.STAGE2, postedAt: '2026-11-26T10:00:00.000Z', cutoffAt: null };
+  const closed = { ...stage2, stage: orderWindow.STAGES.CLOSED };
+  const data = mockStore(t, {
+    [PAUSE]: activePause({ until: null, previousWindow: stage2 }),
+    [WINDOW]: closed,
+  });
+  mockPauseDependencies(t);
+
+  const sent = [];
+  const bot = { async sendMessage(chatId, text) { sent.push({ chatId, text }); return { message_id: 1 }; } };
+
+  const result = await admin.resumeBot(bot, { id: 1, username: 'boss' });
+
+  assert.equal(result.resumed, true);
+  assert.equal(result.open, false);
+  assert.equal(data[PAUSE], undefined);
+  assert.deepEqual(data[WINDOW], closed);
+  assert.match(sent.find(m => m.chatId === 900).text, /stays closed/);
+});
+
+test('reminders stay off during an indefinite pause', async t => {
+  mockStore(t, { [PAUSE]: activePause({ until: null }) });
+  const bot = { async sendMessage() { throw new Error('should not remind'); } };
+  assert.equal(await admin.runOrderReminders(bot, at('2026-12-03T17:45')), null);
+});
+
 test('Resume Bot leaves the window alone if an admin changed it during the stop', async t => {
   const stage2 = { stage: orderWindow.STAGES.STAGE2, postedAt: '2026-11-26T10:00:00.000Z', cutoffAt: null };
   const newerRound = { stage: orderWindow.STAGES.CLOSED, postedAt: '2026-11-26T13:00:00.000Z', cutoffAt: null };

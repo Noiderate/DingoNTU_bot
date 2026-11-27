@@ -10,6 +10,7 @@ const CALLBACKS = {
   // Emergency stop: each opens a confirm screen, the _YES one does it.
   ADMIN_PAUSE: 'admin_pause',
   ADMIN_PAUSE_CONFIRM: 'admin_pause_yes',
+  ADMIN_PAUSE_INDEFINITE_CONFIRM: 'admin_pause_forever',
   ADMIN_RESUME: 'admin_resume',
   ADMIN_RESUME_CONFIRM: 'admin_resume_yes',
 

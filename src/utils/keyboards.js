@@ -31,6 +31,17 @@ function mainMenuKeyboard({ showExtend = false, paused = false } = {}) {
   };
 }
 
+/** Stop Bot's choice: for today, or until someone taps Resume Bot. */
+function stopBotKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '🛑 Stop for today', callback_data: CALLBACKS.ADMIN_PAUSE_CONFIRM }],
+      [{ text: '⏸️ Stop until I resume', callback_data: CALLBACKS.ADMIN_PAUSE_INDEFINITE_CONFIRM }],
+      [{ text: '✖️ Cancel', callback_data: CALLBACKS.ADMIN_MENU_BACK }],
+    ],
+  };
+}
+
 /** Yes/Cancel for Stop Bot or Resume Bot. Cancel just returns to the main menu. */
 function pauseConfirmKeyboard(confirmCallback, confirmText) {
   return {
@@ -316,7 +327,7 @@ function deliveryModeKeyboard(
 
   if (canManuallyPost) {
     const postText = nextHallToPostMode === 'preorder'
-      ? `📣 Confirm stock & post   `
+      ? `📣 Edit Stock & Post   `
       : nextHallToPostMode === 'coming'
         ? `${nextHallToPost.shortName || nextHallToPost.name}, we are coming   `
         : `${nextHallToPost.shortName || nextHallToPost.name}, we are here   `;
@@ -370,6 +381,7 @@ module.exports = {
   createCallbackItemToken,
   mainMenuKeyboard,
   pauseConfirmKeyboard,
+  stopBotKeyboard,
   settingsMenuKeyboard,
   manageAdminsKeyboard,
   adminListKeyboard,
